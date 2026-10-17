@@ -1,0 +1,15 @@
+# IFP 属性测试 / 验证配置
+#
+# 用法：ifp verify examples/refund/refund.ifp
+#       （会自动发现同目录下的 property_test.yaml）
+#
+# CI 流水线建议使用 light 模式（更小的上界 + 更短超时）。
+
+property_test:
+  intent: RefundOrder      # 只验证该 Intent；留空则验证全部
+  lower: 0                 # 数值变量下界
+  upper: 100000            # 数值变量上界（避免无界整数导致求解耗时）
+  timeout_ms: 5000         # 单次求解超时
+  mode: light              # light（CI）| full（本地 / 夜间任务）
+  max_steps: 2             # 多步路径搜索的最大动作步数（CI 用 2，夜间任务可用 3~4）
+  invariants: []           # 只验证指定不变量；留空表示全部

@@ -1,0 +1,106 @@
+(* ---------------------------------------------------------------------------
+ * IFP DSL — EBNF 语法规范
+ *
+ * 本文件是 src/ifp/grammar.lark 的 EBNF 等价描述，供文档与外部工具参考。
+ * 修改语法时，必须同步更新 grammar.lark 与本文件。
+ *
+ * 约定：
+ *   - 块内条目（field/invariant/action/... 等）以空白（含换行）分隔，不使用逗号；
+ *   - 状态值之间使用逗号分隔；
+ *   - 关键字大小写敏感；上下文/类型名匹配 CNAME，字段/动作名匹配 NAME。
+ *
+ * 支持值对象成员访问 field.member（field_path），可用于表达式与场景 given。
+ * --------------------------------------------------------------------------- *)
+
+start            = { context_decl | scenario_decl } ;
+
+(* ----------------------------- 模型声明 --------------------------------- *)
+
+context_decl     = "context" CNAME "{" { context_item } "}" ;
+context_item     = description | value_decl | intent_decl | contract_decl ;
+
+description      = "description" ":" STRING ;
+
+value_decl       = "value" CNAME "{" { value_item } "}" ;
+value_item       = description | field_decl | invariant_decl ;
+
+intent_decl      = "intent" CNAME "{" { intent_item } "}" ;
+intent_item      = description | field_decl | state_decl | initial_decl
+                 | invariant_decl | action_decl ;
+
+initial_decl     = "initial" ":" enum_ref ;
+
+field_decl       = "field" NAME ":" type_ref [ "=" expr ] ;
+
+type_ref         = "Decimal" | "Int" | "Bool" | "String" | CNAME ;
+
+state_decl       = "state" CNAME "{" state_value { "," state_value } "}" ;
+state_value      = CNAME ;
+
+invariant_decl   = "invariant" NAME "{" { invariant_item } "}" ;
+invariant_item   = "expr"     ":" expr
+                 | "baseline" ":" BOOL
+                 | "risk"     ":" STRING
+                 | "owner"    ":" STRING
+                 | "note"     ":" STRING ;
+
+action_decl      = "action" CNAME [ action_params ] "{" { action_item } "}" ;
+action_params    = "(" param { "," param } ")" ;
+param            = NAME ":" type_ref ;
+action_item      = "pre"        ":" expr
+                 | "post"       ":" expr
+                 | "transition" ":" enum_ref ;
+
+contract_decl    = "contract" CNAME "{" { contract_item } "}" ;
+contract_item    = description | expose_decl | invariant_decl ;
+expose_decl      = "expose" NAME { "," NAME } ;
+
+(* ----------------------------- 场景声明 --------------------------------- *)
+
+scenario_decl    = "scenario" CNAME "{" { scenario_item } "}" ;
+scenario_item    = "context"  ":" CNAME
+                 | "intent"   ":" CNAME
+                 | "given"    "{" { field_assign } "}"
+                 | "when"     CNAME "(" [ named_args ] ")"
+                 | "rejected" CNAME "(" [ named_args ] ")"
+                 | "then"     expr ;
+
+field_assign     = field_target "=" expr ;
+field_target     = NAME { "." NAME } ;
+named_args       = named_arg { "," named_arg } ;
+named_arg        = NAME "=" expr ;
+
+(* ------------------------------- 表达式 -------------------------------- *)
+
+expr             = or_expr ;
+or_expr          = and_expr { "||" and_expr } ;
+and_expr         = comp_expr { "&&" comp_expr } ;
+comp_expr        = arith [ COMPOP arith ] ;
+arith            = term { ("+" | "-") term } ;
+term             = unary { ("*" | "/") unary } ;
+unary            = "-" unary
+                 | "old" "(" expr ")"
+                 | atom ;
+atom             = NUMBER
+                 | STRING
+                 | BOOL
+                 | enum_ref
+                 | NAME "(" [ named_args ] ")"
+                 | NAME field_path
+                 | NAME
+                 | "(" expr ")" ;
+
+(* 值对象成员访问：balance.amount（至少一段） *)
+field_path       = "." NAME { "." NAME } ;
+
+enum_ref         = CNAME "::" CNAME ;
+
+COMPOP           = "==" | "!=" | "<=" | ">=" | "<" | ">" ;
+NUMBER           = /[0-9]+(\.[0-9]+)?/ ;
+BOOL             = "true" | "false" ;
+
+CNAME            = /[A-Z][A-Za-z0-9_]*/ ;
+NAME             = /(?!true\b|false\b)[a-z][A-Za-z0-9_]*/ ;
+STRING           = /"([^"\\]|\\.)*"/ ;
+
+(* 空白与注释（// 到行尾）在词法阶段被忽略。 *)

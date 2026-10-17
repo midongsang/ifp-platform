@@ -1,0 +1,101 @@
+{
+  "name": "ifp-vscode",
+  "displayName": "IFP Language Support",
+  "description": "IFP (Intent Formalization Platform) language support for VS Code: syntax highlighting, live diagnostics, go-to-definition and quick fixes for .ifp model files.",
+  "version": "0.1.0",
+  "publisher": "ifp-platform",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/midongsang/ifp-platform"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:ifp"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ifp",
+        "aliases": [
+          "IFP"
+        ],
+        "extensions": [
+          ".ifp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ifp",
+        "scopeName": "source.ifp",
+        "path": "./syntaxes/ifp.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "IFP",
+      "properties": {
+        "ifp.server.command": {
+          "type": "string",
+          "default": "ifp",
+          "description": "Command used to start the IFP language server."
+        },
+        "ifp.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "lsp",
+            "--stdio"
+          ],
+          "description": "Arguments passed to the IFP language server command."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "ifp.verify",
+        "title": "IFP: Verify Model (property test)"
+      },
+      {
+        "command": "ifp.simulate",
+        "title": "IFP: Simulate Scenarios"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "ifp.verify",
+          "when": "resourceLangId == ifp",
+          "group": "navigation"
+        },
+        {
+          "command": "ifp.simulate",
+          "when": "resourceLangId == ifp",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ifp.verify",
+          "when": "resourceLangId == ifp"
+        },
+        {
+          "command": "ifp.simulate",
+          "when": "resourceLangId == ifp"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "scripts": {
+    "package": "vsce package"
+  }
+}

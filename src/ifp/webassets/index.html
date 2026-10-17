@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IFP 模型编辑器</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>IFP 模型编辑器</h1>
+      <div class="actions">
+        <button id="verify" type="button">运行属性测试</button>
+        <span id="status" class="status"></span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="editor-pane">
+        <div class="editor">
+          <div class="gutter" id="gutter" aria-hidden="true"></div>
+          <div class="code-wrap">
+            <pre class="highlight" id="highlight" aria-hidden="true"></pre>
+            <textarea id="source" spellcheck="false" autocomplete="off"
+                      autocapitalize="off" wrap="off"></textarea>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-pane">
+        <section class="panel">
+          <h2>诊断</h2>
+          <ul id="diagnostics" class="diagnostics"></ul>
+        </section>
+        <section class="panel">
+          <h2>模型结构</h2>
+          <div id="model" class="model"></div>
+        </section>
+        <section class="panel">
+          <h2>反例</h2>
+          <div id="counterexamples" class="counterexamples"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

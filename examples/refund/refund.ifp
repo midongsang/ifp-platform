@@ -1,0 +1,93 @@
+// ---------------------------------------------------------------------------
+// 示例：电商退款域 IFP 模型
+//
+// 业务来源：订单支持多次部分退款，历史上因"多次部分退款叠加"导致超额退款资损。
+// 风险等级：高（涉及资金）
+// 外部依赖：PaymentContext（支付域）、OrderContext（订单域）
+// ---------------------------------------------------------------------------
+
+context RefundContext {
+    description: "电商退款限界上下文，负责退款单生命周期与累计退款资金约束"
+
+    value Money {
+        description: "金额值对象，资金一律使用 Decimal，禁止浮点"
+
+        field amount: Decimal
+        field currency: String
+
+        // 金额不得为负：值对象自身的硬约束
+        invariant nonNegative {
+            expr: amount >= 0
+            note: "金额不允许为负数，资金基础约束"
+            owner: "finance-team"
+        }
+    }
+
+    intent RefundOrder {
+        description: "退款聚合根：聚合订单与多笔退款单，维护累计退款资金不变量"
+
+        field orderPaidAmount: Decimal
+        field totalRefundedAmount: Decimal = 0
+        field status: RefundStatus = RefundStatus::Pending
+
+        state RefundStatus {
+            Pending,
+            Approved,
+            Refunded,
+            Rejected
+        }
+
+        initial: RefundStatus::Pending
+
+        // 核心资金不变量：累计退款金额不得超过订单实付金额。
+        // 标记 Baseline：任何修改必须走强制审批。
+        invariant totalRefundNotExceedPaid {
+            expr: totalRefundedAmount <= orderPaidAmount
+            baseline: true
+            risk: "累计退款超过订单实付金额，造成超额退款资金损失"
+            owner: "finance-team"
+            note: "基线不变量，修改需单独审批"
+        }
+
+        // 退款金额本身不得为负
+        invariant refundAmountNotNegative {
+            expr: totalRefundedAmount >= 0
+            note: "累计退款金额不得为负"
+            owner: "finance-team"
+        }
+
+        // 订单实付金额必须为正，否则不存在真实退款场景
+        invariant paidAmountPositive {
+            expr: orderPaidAmount > 0
+            note: "订单实付金额必须为正数"
+            owner: "product-team"
+        }
+
+        action Audit {
+            transition: RefundStatus::Approved
+            pre: status == RefundStatus::Pending
+            post: status == RefundStatus::Approved
+        }
+
+        action Reject {
+            transition: RefundStatus::Rejected
+            pre: status == RefundStatus::Pending
+            post: status == RefundStatus::Rejected
+        }
+
+        // 执行资金退款：状态必须为已审核通过，且累计退款金额按退款额递增。
+        action ExecuteRefund(amount: Decimal) {
+            transition: RefundStatus::Refunded
+            pre: status == RefundStatus::Approved
+                 && amount >= 0
+            post: status == RefundStatus::Refunded
+                  && totalRefundedAmount == old(totalRefundedAmount) + amount
+        }
+    }
+
+    contract RefundContract {
+        description: "退款域对外最小契约，供订单域/支付域调用"
+
+        expose totalRefundedAmount, orderPaidAmount
+    }
+}

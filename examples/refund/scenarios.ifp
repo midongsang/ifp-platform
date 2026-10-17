@@ -1,0 +1,70 @@
+// ---------------------------------------------------------------------------
+// 退款域仿真场景（Scenario）
+//
+// 覆盖：正常流程、边界正向流程、非法操作拦截。
+// 大规模边界挖掘交给 PropertyTest（见 property_test.yaml）。
+// ---------------------------------------------------------------------------
+
+scenario PartialRefundOnce {
+    context: RefundContext
+    intent: RefundOrder
+
+    // 场景目的：单次部分退款正向流程
+    given {
+        orderPaidAmount = 100
+        totalRefundedAmount = 0
+        status = RefundStatus::Pending
+    }
+
+    when Audit()
+    then status == RefundStatus::Approved
+
+    when ExecuteRefund(amount = 40)
+    then status == RefundStatus::Refunded
+         && totalRefundedAmount == 40
+}
+
+scenario FullRefundBoundary {
+    context: RefundContext
+    intent: RefundOrder
+
+    // 场景目的：退款金额恰好等于订单实付金额（边界正向）
+    given {
+        orderPaidAmount = 200
+        totalRefundedAmount = 0
+        status = RefundStatus::Pending
+    }
+
+    when Audit()
+    when ExecuteRefund(amount = 200)
+    then totalRefundedAmount == 200
+         && totalRefundedAmount <= orderPaidAmount
+}
+
+scenario AuditRejectedWhenNotPending {
+    context: RefundContext
+    intent: RefundOrder
+
+    // 场景目的：非待审核状态下发起审核，必须被前置条件拦截
+    given {
+        orderPaidAmount = 100
+        totalRefundedAmount = 0
+        status = RefundStatus::Approved
+    }
+
+    rejected Audit()
+}
+
+scenario RefundRejectedWhenNotApproved {
+    context: RefundContext
+    intent: RefundOrder
+
+    // 场景目的：未审核通过不允许执行资金退款
+    given {
+        orderPaidAmount = 100
+        totalRefundedAmount = 0
+        status = RefundStatus::Pending
+    }
+
+    rejected ExecuteRefund(amount = 10)
+}

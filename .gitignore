@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# ---- IFP 运行产物 ----
+# 审计日志为本地运行产物，不入库
+audit/*.jsonl
+*.audit.jsonl
+# 导出的制品
+out/

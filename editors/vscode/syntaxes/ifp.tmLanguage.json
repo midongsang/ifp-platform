@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "IFP",
+  "scopeName": "source.ifp",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#description" },
+    { "include": "#types" },
+    { "include": "#enum-ref" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#type-names" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.ifp",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.ifp",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ifp",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ifp",
+          "match": "\\b(context|value|intent|state|initial|field|invariant|expr|baseline|risk|owner|note|action|pre|post|transition|contract|expose|scenario|given|when|rejected|then)\\b"
+        }
+      ]
+    },
+    "description": {
+      "patterns": [
+        {
+          "name": "keyword.other.ifp",
+          "match": "\\bdescription\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.ifp",
+          "match": "\\b(Decimal|Int|Bool|String)\\b"
+        }
+      ]
+    },
+    "enum-ref": {
+      "patterns": [
+        {
+          "name": "constant.other.ifp",
+          "match": "\\b[A-Z][A-Za-z0-9_]*::[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.ifp",
+          "match": "\\b(old|true|false)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ifp",
+          "match": "==|!=|<=|>=|&&|\\|\\||[-+*/<>]"
+        }
+      ]
+    },
+    "type-names": {
+      "patterns": [
+        {
+          "name": "entity.name.type.ifp",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.ifp",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    }
+  }
+}

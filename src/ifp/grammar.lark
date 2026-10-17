@@ -1,0 +1,112 @@
+// ---------------------------------------------------------------------------
+// IFP DSL — Intent Formalization Platform
+//
+// 语法说明见 docs/dsl-spec.md。修改本文件后必须同步更新 specs/ifp-dsl.ebnf。
+// ---------------------------------------------------------------------------
+
+start: (context_decl | scenario_decl)*
+
+// ----------------------------- 模型声明 ------------------------------------
+
+context_decl: "context" CNAME "{" context_item* "}"
+context_item: description | value_decl | intent_decl | contract_decl
+
+description: "description" ":" STRING
+
+value_decl: "value" CNAME "{" value_item* "}"
+value_item: description | field_decl | invariant_decl
+
+intent_decl: "intent" CNAME "{" intent_item* "}"
+intent_item: description | field_decl | state_decl | initial_decl
+           | invariant_decl | action_decl
+
+initial_decl: "initial" ":" enum_ref
+
+field_decl: "field" NAME ":" type_ref ("=" expr)?
+
+?type_ref: "Decimal" -> t_decimal
+         | "Int"     -> t_int
+         | "Bool"    -> t_bool
+         | "String"  -> t_string
+         | CNAME     -> t_named
+
+state_decl: "state" CNAME "{" state_value ("," state_value)* "}"
+state_value: CNAME
+
+invariant_decl: "invariant" NAME "{" invariant_item* "}"
+invariant_item: "expr"     ":" expr   -> inv_expr
+              | "baseline" ":" BOOL   -> inv_baseline
+              | "risk"     ":" STRING -> inv_risk
+              | "owner"    ":" STRING -> inv_owner
+              | "note"     ":" STRING -> inv_note
+
+action_decl: "action" CNAME action_params? "{" action_item* "}"
+action_params: "(" param ("," param)* ")"
+param: NAME ":" type_ref
+action_item: "pre"        ":" expr     -> act_pre
+           | "post"       ":" expr     -> act_post
+           | "transition" ":" enum_ref -> act_transition
+
+contract_decl: "contract" CNAME "{" contract_item* "}"
+contract_item: description | expose_decl | invariant_decl
+expose_decl: "expose" NAME ("," NAME)*
+
+// ----------------------------- 场景声明 ------------------------------------
+
+scenario_decl: "scenario" CNAME "{" scenario_item* "}"
+scenario_item: "context"  ":" CNAME                 -> s_context
+             | "intent"   ":" CNAME                 -> s_intent
+             | "given"    "{" field_assign* "}"     -> s_given
+             | "when"     CNAME "(" named_args? ")" -> s_when
+             | "rejected" CNAME "(" named_args? ")" -> s_rejected
+             | "then"     expr                      -> s_then
+
+field_assign: field_target "=" expr
+field_target: NAME ("." NAME)*
+named_args: named_arg ("," named_arg)*
+named_arg: NAME "=" expr
+
+// ------------------------------- 表达式 ------------------------------------
+
+?expr: or_expr
+?or_expr: and_expr
+        | or_expr "||" and_expr -> or_op
+?and_expr: comp_expr
+         | and_expr "&&" comp_expr -> and_op
+?comp_expr: arith
+          | arith COMPOP arith -> compare
+?arith: term
+      | arith "+" term -> add
+      | arith "-" term -> sub
+?term: unary
+     | term "*" unary -> mul
+     | term "/" unary -> div
+?unary: "-" unary -> neg
+      | "old" "(" expr ")" -> old
+      | atom
+?atom: NUMBER   -> number
+     | STRING   -> string
+     | BOOL     -> bool_lit
+     | enum_ref
+     | NAME "(" named_args? ")" -> call
+     | NAME field_path -> field_access
+     | NAME     -> var
+     | "(" expr ")"
+
+// 值对象成员访问：balance.amount.total（至少一段）
+field_path: "." NAME ("." NAME)*
+
+enum_ref: CNAME "::" CNAME
+
+COMPOP: "==" | "!=" | "<=" | ">=" | "<" | ">"
+NUMBER: /[0-9]+(\.[0-9]+)?/
+BOOL: "true" | "false"
+
+CNAME: /[A-Z][A-Za-z0-9_]*/
+// 标识符不能是 true / false，确保布尔字面量被识别为 BOOL。
+NAME: /(?!true\b|false\b)[a-z][A-Za-z0-9_]*/
+STRING: /"([^"\\]|\\.)*"/
+
+%import common.WS
+%ignore WS
+%ignore /\/\/[^\n]*/
