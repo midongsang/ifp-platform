@@ -5,7 +5,7 @@
 > Each milestone specifies a **goal** and its **acceptance criteria**; no specific dates are preset — delivery is judged by whether the acceptance criteria are met.
 > Related documents: [DSL Syntax Specification](dsl-spec.md) · [Modeling Standard](modeling-standard.md) · [Glossary](glossary.md)
 
-Current version: **v0.1.0** (the first release), with the complete pipeline `parse → check → verify → simulate → Diff → export` already working end to end; the refund-domain example reproduces on the command line.
+Current version: **v0.2.0**, with the complete pipeline `parse → check → verify → simulate → Diff → export` already working end to end; the refund-domain example reproduces on the command line. v0.2.0 adds an isolated sandbox and a task scheduler on top of the first release.
 
 ---
 
@@ -56,9 +56,28 @@ Version numbers follow `0.<default-iteration>.<patch>`:
 
 ---
 
+## v0.2.0 — Isolated Sandbox and Task Scheduler (the second release, done)
+
+**Goal**: Move checking and simulation from "one run at a time" to "controlled concurrency inside isolation", so a batch of models runs reliably inside a resource-limited sandbox with a script-friendly per-task report.
+
+| Completed Capabilities | Implementation Location |
+| --- | --- |
+| Isolated sandbox (private temp directory / POSIX resource limits / wall-clock timeout / process-group kill / token stripping / output truncation) | [`sandbox.py`](../../src/ifp/sandbox.py) |
+| Task scheduler (thread-pool concurrency / order-preserving results / `fail-fast` skipping / summary statistics) | [`scheduler.py`](../../src/ifp/scheduler.py) |
+| `ifp run` subcommand (splits check / verify / simulate into tasks; `--job` / `-j` / `--timeout` / `--cpu` / `--memory` / `--fail-fast` / `--json`) | [`cli.py`](../../src/ifp/cli.py) |
+| `--sandbox` one-shot run for `ifp verify` / `ifp simulate` | [`cli.py`](../../src/ifp/cli.py) |
+| Sandbox default preferences (`sandbox.jobs` / `sandbox.timeout` / `sandbox.cpu` / `sandbox.memory`) | [`prefs.py`](../../src/ifp/prefs.py) |
+| Environment self-check covering sandbox availability | [`doctor.py`](../../src/ifp/doctor.py) |
+
+Task granularity: `check` per input path (a directory is checked as a whole so cross-file references resolve), `verify` per file × Intent, `simulate` per scenario. Every task returns one of five statuses — `ok` / `failed` / `timeout` / `blocked` / `skipped` — and timeouts, non-zero exits and launch failures all map to an explicit status without ever aborting the whole batch.
+
+**Acceptance criteria**: `ifp run` concurrently schedules all three task kinds (check / verify / simulate) on the refund-domain example and reports a status and duration per task; a failing task does not take down the whole batch report, and `--fail-fast` marks the remaining tasks as `skipped` after the first failure; `ifp doctor` reports sandbox availability; every new capability has unit tests (see [`tests/test_sandbox.py`](../../tests/test_sandbox.py) · [`tests/test_scheduler.py`](../../tests/test_scheduler.py) · [`tests/test_run_cli.py`](../../tests/test_run_cli.py)).
+
+---
+
 ## What Comes Next
 
-The following capabilities are planned for the platform but are not yet provided by the current reference implementation (see the [Glossary](glossary.md)): Sandbox, Event and Event Replay, Task Scheduler, API Key, Workflow.
+The following capabilities are planned for the platform but are not yet provided by the current reference implementation (see the [Glossary](glossary.md)): Event and Event Replay, API Key, Workflow.
 
 ---
 

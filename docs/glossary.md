@@ -71,5 +71,6 @@
 | 导出器 / 制品 | [`src/ifp/exporter.py`](../src/ifp/exporter.py) |
 | 插件 SDK | [`src/ifp/plugin.py`](../src/ifp/plugin.py) |
 | 模型仓库 / 语义合并 | [`src/ifp/repo.py`](../src/ifp/repo.py)、[`src/ifp/semantic_merge.py`](../src/ifp/semantic_merge.py) |
+| 沙箱 / 任务调度器 | [`src/ifp/sandbox.py`](../src/ifp/sandbox.py)、[`src/ifp/scheduler.py`](../src/ifp/scheduler.py)（`ifp run` / `--sandbox` 见 [`src/ifp/cli.py`](../src/ifp/cli.py)） |
 
-> 说明：术语“沙箱”“事件”“事件回放”“任务调度器”“API 密钥”“工作流”属于平台规划中的能力，当前参考实现尚未提供，详见[路线图](roadmap.md)。
+> 说明：术语“事件”“事件回放”“API 密钥”“工作流”属于平台规划中的能力，当前参考实现尚未提供，详见[路线图](roadmap.md)。

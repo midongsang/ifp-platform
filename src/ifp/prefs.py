@@ -18,7 +18,13 @@ DEFAULTS: dict[str, Any] = {
         "source": "midongsang/ifp-platform",
         "auto_check": False,
         "last_check": 0.0,
-    }
+    },
+    "sandbox": {
+        "jobs": 4,
+        "timeout": 120,
+        "cpu": 60,
+        "memory": 4096,
+    },
 }
 
 

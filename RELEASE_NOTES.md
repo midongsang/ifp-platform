@@ -1,33 +1,37 @@
-# IFP v0.1.0 — 第一个版本
+# IFP v0.2.0 — 隔离沙箱与任务调度器
 
-把业务规则从自然语言变成机器可校验的模型：`.ifp` 建模 → 类型检查与 Lint → SMT 属性测试 →
-场景仿真 → 语义 Diff 与治理 → 协作与权限 → 导出，链路端到端跑通。
+第二个版本。在第一个版本（v0.1.0）把 `建模 → 检查 → 验证 → 仿真 → 治理 → 协作 → 导出`
+链路跑通之后，v0.2.0 把校验与仿真任务从「一次跑一个」推进到「受控并发、隔离执行」。
 
-## 主要能力
+## 新增能力
 
-- **建模与检查**：限界上下文、Intent、值对象、状态机、不变量、Pre/Post、跨域契约；字段 /
-  枚举 / 类型安全与建模规范 Lint（资金统一用 `Decimal`）。
-- **验证与仿真**：SMT 反例搜索（值对象字段内联展开、多步路径、`single` / `light` / `full`
-  档位与超时降级）；场景仿真覆盖正向、边界与非法操作拦截。
-- **治理与协作**：语义 Diff 与基线风险评分、CI 语义门禁、Hash Chain 审计日志、RBAC 角色
-  访问控制、Git 兼容模型仓库与业务语义三方合并、模型度量与模型 / 代码版本对齐审计。
-- **编辑与可视化**：内置 LSP（实时诊断 / 结构大纲 / **跳转定义** / **快速修复**）、
-  VS Code 插件、浏览器内 Web 编辑器。
-- **上手与更新**：`ifp update` 读取来源仓库的发行版（展示版本 / 发行时间 / 资产大小，由你
-  决定是否更新）、`ifp doctor` 环境自检、`ifp config` 本地偏好管理。
+- **隔离沙箱**：`ifp verify` / `ifp simulate` 可加 `--sandbox` 单跑；任务在独立临时目录的子进程
+  中执行，剥离环境里的令牌，并施加 POSIX 资源上限（CPU / 内存 / 单文件大小 / 句柄数）与墙钟超时，
+  超时以终止整个进程组收尾，输出过长自动截断。
+- **任务调度器**：新增 `ifp run`，把一批输入拆成任务（`check` 按路径、`verify` 按「文件 × Intent」、
+  `simulate` 按场景）并并发调度；结果按提交顺序返回，逐任务报告 `ok` / `failed` / `timeout` /
+  `blocked` / `skipped` 状态与耗时，`--fail-fast` 在首个失败后跳过剩余任务，`--json` 供脚本消费。
+- **偏好与自检**：新增 `sandbox.jobs` / `sandbox.timeout` / `sandbox.cpu` / `sandbox.memory`
+  偏好（`ifp config` 管理）；`ifp doctor` 追加沙箱可用性自检。
+
+## 兼容性与约束
+
+- 仍只依赖标准库（`subprocess` / `resource` / `tempfile` / `json` / `threading` / `concurrent.futures`）；
+- 非 POSIX 平台自动退化为仅施加墙钟超时，其余行为不变；
+- 沙箱、任务调度器均与既有诊断码体系、审计日志与建模规范保持一致。
 
 ## 安装
 
 下载下方的 wheel / sdist 资产安装：
 
 ```bash
-pip install ifp_platform-0.1.0-py3-none-any.whl
+pip install ifp_platform-0.2.0-py3-none-any.whl
 ```
 
 ## 命令行
 
 ```text
-ifp check / verify / simulate / diff / baseline / export / init
+ifp check / verify / simulate / run / diff / baseline / export / init
 ifp rbac / repo / merge / metrics / align
 ifp lsp / web / doctor / update / config / version
 ```

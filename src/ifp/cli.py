@@ -4,6 +4,7 @@
     ifp check    <paths...>   类型检查 + Lint
     ifp verify   <model>      属性测试（SMT 反例搜索）+ 一致性检查
     ifp simulate <paths...>   运行 Scenario 仿真
+    ifp run      <paths...>   在隔离沙箱中按并发调度校验任务（check / verify / simulate）
     ifp diff     <old> <new>  语义 Diff + 风险评分 + 审批判定（文件或目录，支持 CI 门禁）
     ifp baseline <model>      列出基线不变量
     ifp rbac                  列出角色与权限矩阵
@@ -27,13 +28,13 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from . import __version__, parser, plugin, prefs, rbac
+from . import __version__, parser, plugin, prefs, rbac, sandbox
 from .audit import AuditLog
 from .baseline import APPROVAL_THRESHOLD, approval_required, baseline_invariants, risk_score
 from .config import find_config, load_plan
@@ -44,6 +45,7 @@ from .lint import lint as run_lint
 from .lsp import serve
 from .metrics import collect as collect_metrics
 from .repo import ModelRepo, alignment_report
+from .scheduler import STATUS_SKIPPED, Scheduler, Task, summarize
 from .semantic_merge import merge_paths
 from .semantic_merge import record as record_merge
 from .simulate import simulate
@@ -114,6 +116,114 @@ def _fail_if_errors(diags: list[Diagnostic], strict: bool = False) -> None:
         blocking += [d for d in diags if d.severity is Severity.WARNING]
     if blocking:
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# 沙箱与任务调度
+# ---------------------------------------------------------------------------
+
+def _sandbox_limits(
+    timeout: Optional[float] = None,
+    cpu: Optional[int] = None,
+    memory: Optional[int] = None,
+) -> sandbox.Limits:
+    """按「命令行参数 > 本地偏好 > 内置默认」的顺序组装沙箱上限。"""
+
+    return sandbox.Limits(
+        timeout_s=float(timeout if timeout is not None else prefs.get("sandbox.timeout")),
+        cpu_seconds=int(cpu if cpu is not None else prefs.get("sandbox.cpu")),
+        memory_mb=int(memory if memory is not None else prefs.get("sandbox.memory")),
+    )
+
+
+def _sandbox_jobs(jobs: Optional[int]) -> int:
+    """解析并发度，默认取偏好 ``sandbox.jobs``。"""
+
+    return max(1, int(jobs if jobs is not None else prefs.get("sandbox.jobs")))
+
+
+def _dispatch_to_sandbox(argv: Sequence[str]) -> None:
+    """把当前子命令放进沙箱重跑，并透传子进程输出与退出码。"""
+
+    limits = _sandbox_limits()
+    console.print(
+        f"在沙箱中执行：ifp {' '.join(argv)}（{limits.describe()}）", style="cyan", markup=False
+    )
+    result = sandbox.run(argv, limits=limits)
+    for line in result.stdout.splitlines():
+        console.print(line, markup=False)
+    for line in result.stderr.splitlines():
+        console.print(line, style="red", markup=False)
+    if result.detail:
+        console.print(result.detail, style="yellow", markup=False)
+    if result.status != sandbox.STATUS_OK:
+        raise typer.Exit(code=result.exit_code if result.exit_code > 0 else 1)
+
+
+def _build_tasks(job: str, paths: list[Path]) -> list[Task]:
+    """按任务类型把输入拆成调度任务。
+
+    路径统一转成绝对路径：沙箱子进程在独立临时目录中运行，相对路径在那里无法解析。
+    粒度规则：``check`` 按输入的每个路径（目录作为一个整体检查，保证跨文件引用可解析）；
+    ``verify`` 按「文件 × Intent」；``simulate`` 按「场景」。
+    """
+
+    kind = job.strip().lower()
+
+    if kind == "check":
+        return [
+            Task(
+                name=str(path),
+                argv=("check", str(path.resolve())),
+                kind="check",
+                metadata={"path": str(path)},
+            )
+            for path in paths
+        ]
+
+    if kind == "verify":
+        tasks = []
+        for file in _collect_paths(paths):
+            model = parser.load(file)
+            for context in model.contexts:
+                for intent in context.intents:
+                    tasks.append(
+                        Task(
+                            name=f"{file}#{intent.name}",
+                            argv=("verify", str(file.resolve()), "--intent", intent.name),
+                            kind="verify",
+                            metadata={"path": str(file), "intent": intent.name},
+                        )
+                    )
+        return tasks
+
+    if kind == "simulate":
+        files = _collect_paths(paths)
+        if not files:
+            return []
+        project = parser.merge(
+            [parser.load(file) for file in files],
+            source=", ".join(str(file) for file in files),
+        )
+        return [
+            Task(
+                name=scenario.name,
+                argv=(
+                    "simulate",
+                    *(str(file.resolve()) for file in files),
+                    "--name",
+                    scenario.name,
+                ),
+                kind="simulate",
+                metadata={"scenario": scenario.name},
+            )
+            for scenario in project.scenarios
+        ]
+
+    console.print(
+        f"未知任务类型：{job}（可选 check / verify / simulate）", style="bold red", markup=False
+    )
+    raise typer.Exit(code=2)
 
 
 # ---------------------------------------------------------------------------
@@ -369,8 +479,34 @@ def verify_cmd(
         None, "--mode", help="步数档位：single(1 步) / light(2 步) / full(3 步)"
     ),
     audit_path: Optional[Path] = typer.Option(None, "--audit", help="写入审计日志（JSONL）"),
+    sandboxed: bool = typer.Option(
+        False, "--sandbox", help="在隔离沙箱子进程中执行（墙钟与资源上限取 sandbox.* 偏好）"
+    ),
 ) -> None:
-    """属性测试：自动搜索违反不变量的反例，并检查规则一致性。"""
+    """属性测试：自动搜索违反不变量的反例，并检查规则一致性。
+
+    加 ``--sandbox`` 可把本次求解放进隔离沙箱：子进程有墙钟超时、CPU 与内存上限，
+    并在独立临时目录中运行；上限可用 ``ifp config set sandbox.timeout 300`` 等调整。
+    """
+
+    if sandboxed:
+        argv = ["verify", str(model_path.resolve())]
+        for flag, value in (
+            ("--intent", intent),
+            ("--lower", lower),
+            ("--upper", upper),
+            ("--timeout", timeout_ms),
+            ("--steps", steps),
+            ("--mode", mode),
+        ):
+            if value is not None:
+                argv += [flag, str(value)]
+        if config_path is not None:
+            argv += ["--config", str(config_path.resolve())]
+        if audit_path is not None:
+            argv += ["--audit", str(audit_path.resolve())]
+        _dispatch_to_sandbox(argv)
+        return
 
     # 按需导入：z3 / SMT 编码只在 verify 命令用到，避免拖慢其他命令的启动
     from .smt import VerifyConfig, check_consistency, verify
@@ -431,8 +567,22 @@ def verify_cmd(
 def simulate_cmd(
     paths: list[Path] = typer.Argument(..., help="包含 scenario 的模型文件或目录"),
     name: Optional[str] = typer.Option(None, "--name", help="只运行指定场景"),
+    sandboxed: bool = typer.Option(
+        False, "--sandbox", help="在隔离沙箱子进程中执行（墙钟与资源上限取 sandbox.* 偏好）"
+    ),
 ) -> None:
-    """运行 Scenario 仿真，验证行为符合业务预期。"""
+    """运行 Scenario 仿真，验证行为符合业务预期。
+
+    加 ``--sandbox`` 可把本次仿真放进隔离沙箱；上限可用
+    ``ifp config set sandbox.timeout 300`` 等调整。
+    """
+
+    if sandboxed:
+        argv = ["simulate", *(str(path.resolve()) for path in paths)]
+        if name is not None:
+            argv += ["--name", name]
+        _dispatch_to_sandbox(argv)
+        return
 
     results = []
     _, project = _load_project(paths)
@@ -447,6 +597,81 @@ def simulate_cmd(
         failed += 0 if result.passed else 1
     console.print(f"仿真完成：{len(results) - failed} passed / {failed} failed", markup=False)
     if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("run")
+def run_cmd(
+    paths: list[Path] = typer.Argument(..., help="模型文件或目录"),
+    job: str = typer.Option("verify", "--job", help="任务类型：check / verify / simulate"),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="并发度（同时运行的沙箱任务数）"),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help="单个任务的墙钟超时（秒）"),
+    cpu: Optional[int] = typer.Option(None, "--cpu", help="单个任务的 CPU 秒数上限"),
+    memory: Optional[int] = typer.Option(None, "--memory", help="单个任务的内存上限（MB）"),
+    fail_fast: bool = typer.Option(False, "--fail-fast", help="首个任务失败后不再调度剩余任务"),
+    as_json: bool = typer.Option(False, "--json", help="以 JSON 输出调度结果"),
+) -> None:
+    """在隔离沙箱中按并发调度校验任务，逐个报告状态与耗时。
+
+    粒度：``check`` 按输入的每个路径（目录作为一个整体，保证跨文件引用可解析）；
+    ``verify`` 按「文件 × Intent」；``simulate`` 按「场景」。
+    并发度与资源上限默认取偏好（``ifp config set sandbox.jobs 8`` 等），可用参数临时覆盖。
+    """
+
+    try:
+        tasks = _build_tasks(job, paths)
+    except IFPParseError as exc:
+        console.print(str(exc), style="bold red", markup=False)
+        raise typer.Exit(code=1) from exc
+
+    if not tasks:
+        console.print(f"没有可调度的 {job} 任务。", style="yellow", markup=False)
+        raise typer.Exit(code=1)
+
+    limits = _sandbox_limits(timeout=timeout, cpu=cpu, memory=memory)
+    resolved_jobs = _sandbox_jobs(jobs)
+    scheduler = Scheduler(jobs=resolved_jobs, limits=limits, fail_fast=fail_fast)
+    results = scheduler.run(tasks)
+    summary = summarize(results, scheduler.duration_s)
+
+    if as_json:
+        console.print(
+            json.dumps(
+                {
+                    "job": job,
+                    "jobs": resolved_jobs,
+                    "fail_fast": fail_fast,
+                    "limits": {
+                        "timeout_s": limits.timeout_s,
+                        "cpu_seconds": limits.cpu_seconds,
+                        "memory_mb": limits.memory_mb,
+                        "file_size_mb": limits.file_size_mb,
+                        "open_files": limits.open_files,
+                    },
+                    "tasks": [result.to_json() for result in results],
+                    "summary": summary.to_json(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            markup=False,
+            soft_wrap=True,
+        )
+    else:
+        for result in results:
+            if result.ok:
+                style = "green"
+            else:
+                style = "yellow" if result.status == STATUS_SKIPPED else "bold red"
+            console.print(result.line(), style=style, markup=False)
+            if not result.ok:
+                for line in result.tail():
+                    console.print(f"    {line}", style="red", markup=False)
+                if result.detail:
+                    console.print(f"    {result.detail}", style="yellow", markup=False)
+        console.print(summary.line(), style="green" if summary.ok else "bold red", markup=False)
+
+    if not summary.ok:
         raise typer.Exit(code=1)
 
 

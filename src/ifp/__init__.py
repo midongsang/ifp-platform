@@ -12,6 +12,6 @@ from __future__ import annotations
 from .ast import Model
 from .parser import load, parse
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["Model", "__version__", "load", "parse"]

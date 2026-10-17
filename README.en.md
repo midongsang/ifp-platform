@@ -9,7 +9,7 @@ that can be written, queried and verified.
 [![CI](https://github.com/midongsang/ifp-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/ifp-platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
-[![Status](https://img.shields.io/badge/status-v0.1.0-blue.svg)](#status)
+[![Status](https://img.shields.io/badge/status-v0.2.0-blue.svg)](#status)
 
 Repository: [github.com/midongsang/ifp-platform](https://github.com/midongsang/ifp-platform) ·
 package `ifp-platform` · CLI `ifp`
@@ -31,6 +31,7 @@ used to surface only after an incident. IFP aims to catch them before merge.
 - **Checking**: field / enum / type safety plus modeling-standard lint; money is always `Decimal` ([typecheck.py](src/ifp/typecheck.py), [lint.py](src/ifp/lint.py))
 - **Verification**: SMT counterexample search that starts from the initial state and looks for the shortest path breaking an invariant, shortest step count first ([smt.py](src/ifp/smt.py))
 - **Simulation**: hand-written action sequences covering the happy path, boundaries and rejected operations ([simulate.py](src/ifp/simulate.py))
+- **Sandbox and scheduling**: `ifp run` splits check / verify / simulate into tasks and schedules them concurrently inside an isolated sandbox (POSIX resource limits + wall-clock timeout + token stripping + a private temp directory), reporting status and duration per task ([sandbox.py](src/ifp/sandbox.py), [scheduler.py](src/ifp/scheduler.py))
 - **Governance**: semantic diff, risk scoring and approval decision for baseline changes, hash-chain audit log, and role-based access control ([diff.py](src/ifp/diff.py), [baseline.py](src/ifp/baseline.py), [audit.py](src/ifp/audit.py), [rbac.py](src/ifp/rbac.py))
 - **Collaboration**: a Git-compatible model repository (multi-version storage plus business-change linkage), three-way merge over business semantics, model metrics, and model-versus-code version alignment auditing ([repo.py](src/ifp/repo.py), [semantic_merge.py](src/ifp/semantic_merge.py), [metrics.py](src/ifp/metrics.py))
 - **Export**: OpenAPI / Protobuf / Markdown / JSON, plus a plugin hook for custom linters and exporters ([exporter.py](src/ifp/exporter.py), [plugin.py](src/ifp/plugin.py))
@@ -45,6 +46,7 @@ pip install -e ".[dev]"
 ifp check examples/refund/                    # type check + lint
 ifp verify examples/refund/refund.ifp          # property test: search for counterexamples (the sample exits non-zero on purpose)
 ifp simulate examples/refund/                  # scenario simulation
+ifp run examples/refund/ --job verify -j 4     # schedule check / verify / simulate tasks concurrently in an isolated sandbox
 ifp diff base/examples/refund examples/refund --fail-on-approval   # semantic diff / CI gate
 ifp export examples/refund/refund.ifp --format openapi -o out/refund.openapi.json
 ifp rbac                                        # role and permission matrix
@@ -87,6 +89,23 @@ ifp config set update.source acme/ifp            # point at your own release rep
 `ifp update` only performs a read-only check, showing release time and asset size, and installs
 only after you confirm. Offline or restricted networks produce a readable message instead of
 breaking your session, and `IFP_NO_UPDATE_CHECK=1` disables the check entirely.
+
+Sandbox and concurrent scheduling:
+
+```bash
+ifp run examples/refund/ --job verify -j 4     # run verify concurrently in the sandbox (split per file × Intent)
+ifp run examples/refund/ --job check           # split per input path; a directory is checked as a whole so cross-file references resolve
+ifp run examples/refund/ --job simulate --json # split per scenario; JSON reports status and duration for each task
+ifp run examples/refund/ --fail-fast -j 1      # stop after the first failure; remaining tasks are marked skipped
+ifp config set sandbox.jobs 8                  # concurrency; sandbox.timeout / cpu / memory tune the resource limits
+```
+
+`ifp run` runs each task in a sandboxed subprocess: a private temp directory, stripped environment
+tokens, POSIX resource limits (CPU / memory / file size / open files) and a wall-clock timeout.
+Timeouts are enforced by killing the whole process group, and oversized output is truncated. Every
+task returns an explicit status (`ok` / `failed` / `timeout` / `blocked` / `skipped`) and a single
+task's failure never takes down the whole batch report; `--sandbox` can also be added to a one-shot
+`ifp verify` / `ifp simulate`.
 
 ## A refund scenario
 
@@ -175,13 +194,23 @@ Chinese originals: [DSL 语法规范](docs/dsl-spec.md) · [建模规范](docs/m
 
 ## Status
 
-Currently `v0.1.0` (the first release). The `parse → check → verify → simulate → diff → export`
-pipeline is wired end to end and the refund sample reproduces on the command line.
+Currently `v0.2.0`. The `parse → check → verify → simulate → diff → export` pipeline is wired end
+to end and the refund sample reproduces on the command line; v0.2.0 adds an isolated sandbox and a
+task scheduler on top of the first release.
 
 - **Verification**: SMT counterexample search expands value-object fields inline and searches
   multi-step paths (with `single` / `light` / `full` profiles and solver-timeout degradation);
   semantic diff and baseline approval decisions feed a CI gate that runs on every PR and archives
   the audit log.
+- **Sandbox and scheduling**: `ifp run` splits check / verify / simulate into tasks (check per input
+  path, verify per file × Intent, simulate per scenario) and schedules them concurrently inside
+  sandboxed subprocesses; each subprocess gets a private temp directory, stripped environment
+  tokens, POSIX resource limits (CPU / memory / file size / open files) and a wall-clock timeout,
+  with timeouts enforced by killing the process group and oversized output truncated. Results return
+  in submission order with a per-task `ok` / `failed` / `timeout` / `blocked` / `skipped` status and
+  duration, `--fail-fast` stops scheduling after the first failure, and `--json` is script-friendly.
+  `ifp verify` / `ifp simulate` accept `--sandbox` for a one-shot run, and concurrency and limits are
+  controlled by the `sandbox.jobs` / `sandbox.timeout` / `sandbox.cpu` / `sandbox.memory` preferences.
 - **Governance and collaboration**: four roles — modeler, reviewer, approver, auditor — where a
   baseline change needs the `approve_baseline` permission to merge and every decision lands in
   the audit log; a Git-compatible model repository links multiple versions of `.ifp` source to
@@ -205,8 +234,8 @@ pipeline is wired end to end and the refund sample reproduces on the command lin
   offline or proxied environments. Pushing a `v*` tag has CI build and publish a GitHub Release
   (with generated notes plus sdist / wheel assets); when the source repository has no releases the
   update check falls back to its tags, and a release without an asset falls back to installing
-  from the tag. `ifp doctor` self-checks the Python version, dependencies, bundled resources and
-  toolchain.
+  from the tag. `ifp doctor` self-checks the Python version, dependencies, bundled resources,
+  toolchain and sandbox availability.
 
 See the [roadmap](docs/en/roadmap.md) for what comes next.
 
@@ -219,7 +248,8 @@ Version numbers follow `0.<default-iteration>.<patch>`:
 - the third number is the **patch** number, for bug fixes or some minor issues that are not
   convenient to spell out.
 
-`0.1.0` is the first release of this project.
+`0.1.0` is the first release of this project; `0.2.0` is the second, adding an isolated sandbox and
+a task scheduler on top of the first release.
 
 ## Contributing
 

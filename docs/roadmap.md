@@ -4,7 +4,7 @@
 > 每个里程碑给出**目标**与**验收标准**；不预设具体日期，交付以验收标准达成与否为准。
 > 相关文档：[DSL 语法规范](dsl-spec.md) · [建模规范](modeling-standard.md) · [术语表](glossary.md)
 
-当前版本：**v0.1.0**（第一个版本），`解析 → 检查 → 验证 → 仿真 → Diff → 导出` 这条链路已经跑通，退款域示例可端到端复现。
+当前版本：**v0.2.0**，`解析 → 检查 → 验证 → 仿真 → Diff → 导出` 这条链路已经跑通，退款域示例可端到端复现；v0.2.0 在第一个版本之上补齐了隔离沙箱与任务调度器。
 
 ---
 
@@ -55,9 +55,28 @@
 
 ---
 
+## v0.2.0 — 隔离沙箱与任务调度器（第二个版本，已完成）
+
+**目标**：把校验与仿真从「一次跑一个」推进到「受控并发、隔离执行」，让一批模型能在受限制的沙箱里稳定跑完，并给出可脚本消费的逐任务报告。
+
+| 已完成能力 | 实现位置 |
+| --- | --- |
+| 隔离沙箱（独立临时目录 / POSIX 资源上限 / 墙钟超时 / 进程组终止 / 令牌剥离 / 输出截断） | [`sandbox.py`](../src/ifp/sandbox.py) |
+| 任务调度器（线程池并发 / 保序返回 / `fail-fast` 跳过 / 汇总统计） | [`scheduler.py`](../src/ifp/scheduler.py) |
+| `ifp run` 子命令（check / verify / simulate 拆任务；`--job` / `-j` / `--timeout` / `--cpu` / `--memory` / `--fail-fast` / `--json`） | [`cli.py`](../src/ifp/cli.py) |
+| `ifp verify` / `ifp simulate` 的 `--sandbox` 单跑 | [`cli.py`](../src/ifp/cli.py) |
+| 沙箱默认参数偏好（`sandbox.jobs` / `sandbox.timeout` / `sandbox.cpu` / `sandbox.memory`） | [`prefs.py`](../src/ifp/prefs.py) |
+| 环境自检覆盖沙箱可用性 | [`doctor.py`](../src/ifp/doctor.py) |
+
+任务粒度：`check` 按输入路径（目录作为一个整体检查，保证跨文件引用可解析），`verify` 按「文件 × Intent」，`simulate` 按场景。每个任务返回 `ok` / `failed` / `timeout` / `blocked` / `skipped` 五种状态之一，超时、非零退出、无法启动都会映射为明确状态，绝不中断整批任务。
+
+**验收标准**：`ifp run` 对退款域示例的 check / verify / simulate 三类任务均能并发调度并逐任务报告状态与耗时；失败任务不会带走整批报告，`--fail-fast` 在首个失败后把剩余任务标记为 `skipped`；`ifp doctor` 报告沙箱可用性；新增能力均有对应单元测试（见 [`tests/test_sandbox.py`](../tests/test_sandbox.py) · [`tests/test_scheduler.py`](../tests/test_scheduler.py) · [`tests/test_run_cli.py`](../tests/test_run_cli.py)）。
+
+---
+
 ## 后续方向
 
-以下能力属于平台规划，当前参考实现尚未提供（详见[术语表](glossary.md)）：沙箱、事件与事件回放、任务调度器、API 密钥、工作流。
+以下能力属于平台规划，当前参考实现尚未提供（详见[术语表](glossary.md)）：事件与事件回放、API 密钥、工作流。
 
 ---
 

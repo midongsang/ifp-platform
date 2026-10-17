@@ -73,5 +73,6 @@ The following terms already have a corresponding module in the current reference
 | Exporter / Artifact | [`src/ifp/exporter.py`](../../src/ifp/exporter.py) |
 | Plugin SDK (插件 SDK) | [`src/ifp/plugin.py`](../../src/ifp/plugin.py) |
 | Model Repository / Semantic Merge (模型仓库 / 语义合并) | [`src/ifp/repo.py`](../../src/ifp/repo.py), [`src/ifp/semantic_merge.py`](../../src/ifp/semantic_merge.py) |
+| Sandbox / Task Scheduler (沙箱 / 任务调度器) | [`src/ifp/sandbox.py`](../../src/ifp/sandbox.py), [`src/ifp/scheduler.py`](../../src/ifp/scheduler.py) (`ifp run` / `--sandbox` in [`src/ifp/cli.py`](../../src/ifp/cli.py)) |
 
-> Note: the terms "Sandbox", "Event", "Event Replay", "Task Scheduler", "API Key" and "Workflow" refer to capabilities that are planned for the platform; they are not yet provided by the current reference implementation. See the [Roadmap](roadmap.md) for details.
+> Note: the terms "Event", "Event Replay", "API Key" and "Workflow" refer to capabilities that are planned for the platform; they are not yet provided by the current reference implementation. See the [Roadmap](roadmap.md) for details.

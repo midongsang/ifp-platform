@@ -8,7 +8,7 @@ IFP 想把它们收拢成一个能写、能查、能验证的模型。
 [![CI](https://github.com/midongsang/ifp-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/midongsang/ifp-platform/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
-[![Status](https://img.shields.io/badge/status-v0.1.0-blue.svg)](#项目状态)
+[![Status](https://img.shields.io/badge/status-v0.2.0-blue.svg)](#项目状态)
 
 仓库：[github.com/midongsang/ifp-platform](https://github.com/midongsang/ifp-platform) ·
 包名 `ifp-platform` · 命令行 `ifp`
@@ -28,6 +28,7 @@ IFP（Intention Formal Platform）是一套面向业务领域的形式化建模�
 - **检查**：字段 / 枚举 / 类型安全与建模规范 Lint，资金统一用 `Decimal`（[typecheck.py](src/ifp/typecheck.py)、[lint.py](src/ifp/lint.py)）
 - **验证**：SMT 反例搜索，从初始状态出发、按步数由短到长寻找打破不变量的最短路径（[smt.py](src/ifp/smt.py)）
 - **仿真**：手写操作序列，覆盖正向、边界与非法操作拦截（[simulate.py](src/ifp/simulate.py)）
+- **沙箱与调度**：`ifp run` 把 check / verify / simulate 拆成任务，在隔离沙箱中按并发度调度（POSIX 资源上限 + 墙钟超时 + 令牌剥离 + 独立临时目录），逐任务报告状态与耗时（[sandbox.py](src/ifp/sandbox.py)、[scheduler.py](src/ifp/scheduler.py)）
 - **治理**：语义 Diff、基线变更风险评分与审批判定、Hash Chain 审计日志，以及角色访问控制 RBAC（[diff.py](src/ifp/diff.py)、[baseline.py](src/ifp/baseline.py)、[audit.py](src/ifp/audit.py)、[rbac.py](src/ifp/rbac.py)）
 - **协作**：Git 兼容的模型仓库（多版本存取 + 业务变更关联）、基于业务语义的三方合并、模型度量与模型/代码版本对齐审计（[repo.py](src/ifp/repo.py)、[semantic_merge.py](src/ifp/semantic_merge.py)、[metrics.py](src/ifp/metrics.py)）
 - **导出**：OpenAPI / Protobuf / Markdown / JSON，也可用插件注册自定义 Lint 与导出器（[exporter.py](src/ifp/exporter.py)、[plugin.py](src/ifp/plugin.py)）
@@ -42,6 +43,7 @@ pip install -e ".[dev]"
 ifp check examples/refund/                    # 类型检查 + Lint
 ifp verify examples/refund/refund.ifp          # 属性测试：搜反例（示例会按预期返回非零）
 ifp simulate examples/refund/                  # 场景仿真
+ifp run examples/refund/ --job verify -j 4     # 隔离沙箱中并发调度校验任务（check / verify / simulate）
 ifp diff base/examples/refund examples/refund --fail-on-approval   # 语义 Diff / CI 门禁
 ifp export examples/refund/refund.ifp --format openapi -o out/refund.openapi.json
 ifp rbac                                        # 角色与权限矩阵
@@ -82,6 +84,21 @@ ifp config set update.source acme/ifp            # 换用你自己的发行仓�
 
 `ifp update` 只做只读检查，展示发行时间与资产大小，确认后才下载安装；离线或网络受限时给出
 可读提示而不会中断使用，也可用 `IFP_NO_UPDATE_CHECK=1` 彻底关闭检查。
+
+沙箱与并发调度：
+
+```bash
+ifp run examples/refund/ --job verify -j 4        # 隔离沙箱中并发调度 verify（按「文件 × Intent」拆任务）
+ifp run examples/refund/ --job check              # 按输入路径拆任务；目录整体检查以解析跨文件引用
+ifp run examples/refund/ --job simulate --json    # 按场景拆任务，JSON 输出每个任务的状态与耗时
+ifp run examples/refund/ --fail-fast -j 1         # 首个失败即停，剩余任务标记为 skipped
+ifp config set sandbox.jobs 8                     # 并发度；sandbox.timeout / cpu / memory 调整资源上限
+```
+
+`ifp run` 把校验任务逐个放进沙箱子进程：独立临时目录、剥离环境里的令牌、施加 POSIX 资源上限
+（CPU / 内存 / 单文件大小 / 句柄数）与墙钟超时，超时通过终止整个进程组收尾，输出过长时自动截断。
+每个任务都返回明确状态（`ok` / `failed` / `timeout` / `blocked` / `skipped`），任一任务异常都不会
+带走整批报告；`--sandbox` 也可叠加到 `ifp verify` / `ifp simulate` 单跑上。
 
 ## 一个退款场景
 
@@ -173,11 +190,18 @@ ifp-platform/
 
 ## 项目状态
 
-当前 `v0.1.0`（第一个版本），`解析 → 检查 → 验证 → 仿真 → Diff → 导出` 这条链路已经跑通，
-退款域示例可端到端复现。
+当前 `v0.2.0`，`解析 → 检查 → 验证 → 仿真 → Diff → 导出` 这条链路已经跑通，退款域示例可端到端复现；
+v0.2.0 在第一个版本之上补齐了隔离沙箱与任务调度器。
 
 - **验证**：SMT 反例搜索支持值对象字段内联展开与多步路径搜索（带 `single` / `light` / `full`
   档位与超时降级）；语义 Diff 与基线审批判定接入流水线，在 PR 上自动运行并归档审计日志。
+- **沙箱与调度**：`ifp run` 把 check / verify / simulate 拆成任务（check 按输入路径、verify 按
+  「文件 × Intent」、simulate 按场景），在隔离沙箱子进程中按并发度调度；子进程运行在独立临时
+  目录、剥离环境令牌、施加 POSIX 资源上限（CPU / 内存 / 单文件大小 / 句柄数）与墙钟超时，
+  超时以终止整个进程组收尾、输出过长自动截断；结果按提交顺序返回，逐任务给出 `ok` / `failed` /
+  `timeout` / `blocked` / `skipped` 状态与耗时，`--fail-fast` 可在首个失败后停止调度剩余任务，
+  `--json` 供脚本消费。`ifp verify` / `ifp simulate` 也可加 `--sandbox` 单跑，并发与资源上限由
+  `sandbox.jobs` / `sandbox.timeout` / `sandbox.cpu` / `sandbox.memory` 偏好控制。
 - **治理与协作**：区分建模提交 / 评审 / 审批 / 只读审计四类角色，基线变更要拿到
   `approve_baseline` 权限才能合并，判定结果写进审计日志；Git 兼容的模型仓库把多版本 `.ifp`
   源码与业务变更、代码版本关联起来（`ifp repo`）；语义合并按业务规则单元做三方比较，冲突
@@ -194,7 +218,7 @@ ifp-platform/
   `ifp config` 可切换更新来源），全程只依赖标准库并兼容离线与代理环境；推送 `v*` 标签即由 CI
   构建并发布 GitHub Release（附发行说明与 sdist / wheel 资产），来源仓库没有发行版本时更新
   检查回退到标签列表、发行版本缺少资产时回退为按标签安装；`ifp doctor` 一键自检 Python
-  版本、依赖、内置资源与工具链。
+  版本、依赖、内置资源、工具链与沙箱可用性。
 
 后续方向见 [ROADMAP](docs/roadmap.md)。
 
@@ -206,7 +230,7 @@ ifp-platform/
 - 第二位为**默认迭代**序号，随功能推进递增；
 - 第三位为**修补**号，用于修复 bug 或一些不便对外说明的小问题。
 
-`0.1.0` 即本项目的第一个版本。
+`0.1.0` 即本项目的第一个版本；`0.2.0` 为第二个版本，在第一个版本之上补齐隔离沙箱与任务调度器。
 
 ## 贡献
 

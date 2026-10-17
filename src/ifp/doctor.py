@@ -112,6 +112,23 @@ def _check_toolchain() -> Check:
     )
 
 
+def _check_sandbox() -> Check:
+    """在沙箱里跑一次 ``ifp version``，确认子进程调度与资源限制可用。"""
+
+    from .sandbox import STATUS_OK, Limits, limits_supported, run
+
+    _, detail = limits_supported()
+    try:
+        result = run(["version"], limits=Limits(cpu_seconds=20, memory_mb=1024, timeout_s=30))
+    except Exception as exc:  # 沙箱探测的失败种类多，统一转为可读提示
+        return Check("沙箱执行", False, f"沙箱子进程探测失败：{exc}", "请检查子进程与临时目录权限")
+    if result.status != STATUS_OK:
+        reason = result.detail or result.stderr.strip() or result.status
+        return Check("沙箱执行", False, f"沙箱探测异常：{reason}", "请检查子进程与临时目录权限")
+    version = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    return Check("沙箱执行", True, f"{detail}；子进程自检 {version}".rstrip())
+
+
 def _check_update_source(source: str, timeout: float) -> Check:
     from .updater import UpdateError, fetch_latest
 
@@ -138,6 +155,7 @@ def run_checks(*, online: bool = False, source: str | None = None, timeout: floa
         _check_config_dir(),
         _check_resources(),
         _check_toolchain(),
+        _check_sandbox(),
     ]
     if online:
         resolved = source or prefs.get("update.source") or DEFAULT_SOURCE
