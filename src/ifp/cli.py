@@ -19,10 +19,17 @@
     ifp config  get/set/list  查看与修改本地偏好（更新源、自动检查）
     ifp export   <model>      导出制品（json / openapi / markdown / protobuf）
     ifp init     <dir>        生成新模型脚手架
+
+退出码约定：
+    0  成功（检查 / 验证 / 仿真 / 调度未发现失败）
+    1  检查失败（存在 error、反例、仿真未通过、调度任务失败）
+    2  用法或输入错误（未知命令参数、路径不存在、非法取值）
+    3  审批拒绝（语义门禁未通过强制审批）
 """
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import sys
@@ -39,7 +46,7 @@ from .audit import AuditLog
 from .baseline import APPROVAL_THRESHOLD, approval_required, baseline_invariants, risk_score
 from .config import find_config, load_plan
 from .diff import DiffResult, diff_paths
-from .errors import Diagnostic, IFPParseError, Severity
+from .errors import Diagnostic, IFPConfigError, IFPParseError, Severity
 from .exporter import to_json, to_markdown, to_openapi, to_protobuf
 from .lint import lint as run_lint
 from .lsp import serve
@@ -57,6 +64,11 @@ if TYPE_CHECKING:  # 仅用于标注，运行时按需导入以保持 CLI 启动
 app = typer.Typer(add_completion=False, help="IFP 意图形式化平台命令行工具")
 console = Console()
 
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
+EXIT_DENIED = 3
+
 _SEVERITY_STYLE = {
     Severity.ERROR: "bold red",
     Severity.WARNING: "yellow",
@@ -68,46 +80,150 @@ _SEVERITY_STYLE = {
 # 辅助
 # ---------------------------------------------------------------------------
 
-def _collect_paths(paths: list[Path]) -> list[Path]:
+def _collect_paths(paths: Sequence[Path], *, keep_dirs: bool = False) -> list[Path]:
+    """展开输入为具体的 .ifp 文件列表。
+
+    - 支持 glob 模式（如 ``src/**/*.ifp``）；
+    - 目录默认递归收集 ``*.ifp``，``keep_dirs=True`` 时目录作为一个整体保留；
+    - 路径不存在时报可读错误并以退出码 2 结束；
+    - 按绝对路径去重，避免同一文件被重复解析。
+    """
+
     files: list[Path] = []
-    for path in paths:
-        if path.is_dir():
-            files.extend(sorted(path.rglob("*.ifp")))
+    seen: set[str] = set()
+    for raw in paths:
+        text = str(raw)
+        if glob.has_magic(text):
+            candidates = sorted(Path(match) for match in glob.glob(text, recursive=True))
+            if not candidates:
+                console.print(f"glob 未匹配到任何路径：{text}", style="bold red", markup=False)
+                raise typer.Exit(code=EXIT_USAGE)
+        elif not raw.exists():
+            console.print(f"路径不存在：{raw}", style="bold red", markup=False)
+            raise typer.Exit(code=EXIT_USAGE)
         else:
-            files.append(path)
+            candidates = [raw]
+
+        for candidate in candidates:
+            if candidate.is_dir():
+                expanded = [candidate] if keep_dirs else sorted(candidate.rglob("*.ifp"))
+            else:
+                expanded = [candidate]
+            for item in expanded:
+                key = str(item.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                files.append(item)
     return files
 
 
-def _load_models(paths: list[Path]) -> list[tuple[Path, object]]:
-    models = []
-    for path in _collect_paths(paths):
+def _parse_stdin() -> object:
+    """从标准输入读取并解析模型；失败时渲染可读错误。"""
+
+    try:
+        return parser.parse(sys.stdin.read(), filename="<stdin>")
+    except IFPParseError as exc:
+        _print_parse_error(exc)
+        raise typer.Exit(code=EXIT_FAILED) from exc
+
+
+def _load_single(path: Path) -> object:
+    """加载单个模型文件；``-`` 表示从 stdin 读取。失败时渲染可读错误并以退出码 1 结束。"""
+
+    if str(path) == "-":
+        return _parse_stdin()
+    try:
+        return parser.load(path)
+    except IFPParseError as exc:
+        _print_parse_error(exc)
+        raise typer.Exit(code=EXIT_FAILED) from exc
+
+
+def _load_inputs(paths: Sequence[Path], *, keep_dirs: bool = False) -> list[tuple[str, object]]:
+    """加载模型，返回 ``[(显示名, model)]``；参数 ``-`` 表示从 stdin 读取。"""
+
+    results: list[tuple[str, object]] = []
+    file_args: list[Path] = []
+    stdin_consumed = False
+    for raw in paths:
+        if str(raw) == "-":
+            if stdin_consumed:
+                continue
+            stdin_consumed = True
+            results.append(("<stdin>", _parse_stdin()))
+        else:
+            file_args.append(raw)
+
+    for path in _collect_paths(file_args, keep_dirs=keep_dirs):
         try:
-            models.append((path, parser.load(path)))
+            results.append((str(path), parser.load(path)))
         except IFPParseError as exc:
-            console.print(str(exc), style="bold red", markup=False)
-            raise typer.Exit(code=1) from exc
-    return models
+            _print_parse_error(exc)
+            raise typer.Exit(code=EXIT_FAILED) from exc
+    return results
 
 
-def _load_project(paths: list[Path]) -> tuple[list[tuple[Path, object]], object]:
+def _load_project(
+    paths: Sequence[Path], *, keep_dirs: bool = False
+) -> tuple[list[tuple[str, object]], object]:
     """加载全部文件，并返回合并后的项目模型（用于跨文件引用解析）。"""
 
-    models = _load_models(paths)
+    models = _load_inputs(paths, keep_dirs=keep_dirs)
     if not models:
         console.print("未找到任何 .ifp 模型文件。", style="yellow", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     project = parser.merge(
         [model for _, model in models],
-        source=", ".join(str(path) for path, _ in models),
+        source=", ".join(name for name, _ in models),
     )
     return models, project
+
+
+_source_cache: dict[str, list[str]] = {}
+
+
+def _read_source_lines(file: str) -> list[str]:
+    cached = _source_cache.get(file)
+    if cached is None:
+        try:
+            cached = Path(file).read_text(encoding="utf-8-sig").splitlines()
+        except (OSError, UnicodeError):
+            cached = []
+        _source_cache[file] = cached
+    return cached
+
+
+def _source_snippet(file: str, line: int, column: int = 0) -> str:
+    """渲染出错行与插入符，帮助用户快速定位。"""
+
+    if not file or line <= 0:
+        return ""
+    lines = _read_source_lines(file)
+    if not (1 <= line <= len(lines)):
+        return ""
+    gutter = f"{line:>4}"
+    rows = [f"{gutter} | {lines[line - 1].rstrip()}"]
+    if column:
+        rows.append(f"{' ' * len(gutter)} | {' ' * (column - 1)}^")
+    return "\n".join(rows)
+
+
+def _print_parse_error(exc: IFPParseError) -> None:
+    console.print(str(exc), style="bold red", markup=False)
+    snippet = _source_snippet(exc.filename, exc.line, exc.column)
+    if snippet:
+        console.print(snippet, style="dim", markup=False)
 
 
 def _print_diagnostics(diags: list[Diagnostic]) -> None:
     if not diags:
         return
-    for diag in sorted(diags, key=lambda d: (d.file, d.line)):
+    for diag in sorted(diags, key=lambda d: (d.file, d.line, d.column)):
         console.print(diag.format(), style=_SEVERITY_STYLE.get(diag.severity, "white"), markup=False)
+        snippet = _source_snippet(diag.file, diag.line, diag.column)
+        if snippet:
+            console.print(snippet, style="dim", markup=False)
 
 
 def _fail_if_errors(diags: list[Diagnostic], strict: bool = False) -> None:
@@ -115,7 +231,7 @@ def _fail_if_errors(diags: list[Diagnostic], strict: bool = False) -> None:
     if strict:
         blocking += [d for d in diags if d.severity is Severity.WARNING]
     if blocking:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +253,14 @@ def _sandbox_limits(
 
 
 def _sandbox_jobs(jobs: Optional[int]) -> int:
-    """解析并发度，默认取偏好 ``sandbox.jobs``。"""
+    """解析并发度；未指定时取偏好 ``sandbox.jobs``。"""
 
-    return max(1, int(jobs if jobs is not None else prefs.get("sandbox.jobs")))
+    if jobs is None:
+        return max(1, int(prefs.get("sandbox.jobs")))
+    if jobs < 1:
+        console.print(f"并发度必须 >= 1（收到 {jobs}）。", style="bold red", markup=False)
+        raise typer.Exit(code=EXIT_USAGE)
+    return jobs
 
 
 def _dispatch_to_sandbox(argv: Sequence[str]) -> None:
@@ -157,7 +278,7 @@ def _dispatch_to_sandbox(argv: Sequence[str]) -> None:
     if result.detail:
         console.print(result.detail, style="yellow", markup=False)
     if result.status != sandbox.STATUS_OK:
-        raise typer.Exit(code=result.exit_code if result.exit_code > 0 else 1)
+        raise typer.Exit(code=result.exit_code if result.exit_code > 0 else EXIT_FAILED)
 
 
 def _build_tasks(job: str, paths: list[Path]) -> list[Task]:
@@ -178,42 +299,37 @@ def _build_tasks(job: str, paths: list[Path]) -> list[Task]:
                 kind="check",
                 metadata={"path": str(path)},
             )
-            for path in paths
+            for path in _collect_paths(paths, keep_dirs=True)
         ]
 
     if kind == "verify":
         tasks = []
-        for file in _collect_paths(paths):
-            model = parser.load(file)
+        for name, model in _load_inputs(paths):
             for context in model.contexts:
                 for intent in context.intents:
                     tasks.append(
                         Task(
-                            name=f"{file}#{intent.name}",
-                            argv=("verify", str(file.resolve()), "--intent", intent.name),
+                            name=f"{name}#{intent.name}",
+                            argv=("verify", str(Path(name).resolve()), "--intent", intent.name),
                             kind="verify",
-                            metadata={"path": str(file), "intent": intent.name},
+                            metadata={"path": name, "intent": intent.name},
                         )
                     )
         return tasks
 
     if kind == "simulate":
-        files = _collect_paths(paths)
-        if not files:
+        models = _load_inputs(paths)
+        if not models:
             return []
+        files = [str(Path(name).resolve()) for name, _ in models]
         project = parser.merge(
-            [parser.load(file) for file in files],
-            source=", ".join(str(file) for file in files),
+            [model for _, model in models],
+            source=", ".join(name for name, _ in models),
         )
         return [
             Task(
                 name=scenario.name,
-                argv=(
-                    "simulate",
-                    *(str(file.resolve()) for file in files),
-                    "--name",
-                    scenario.name,
-                ),
+                argv=("simulate", *files, "--name", scenario.name),
                 kind="simulate",
                 metadata={"scenario": scenario.name},
             )
@@ -223,7 +339,7 @@ def _build_tasks(job: str, paths: list[Path]) -> list[Task]:
     console.print(
         f"未知任务类型：{job}（可选 check / verify / simulate）", style="bold red", markup=False
     )
-    raise typer.Exit(code=2)
+    raise typer.Exit(code=EXIT_USAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +447,7 @@ def update(
         release = updater.fetch_latest(resolved, include_prerelease=prerelease, timeout=timeout)
     except updater.UpdateError as exc:
         console.print(f"更新检查失败：{exc}", style="bold red", markup=False)
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=EXIT_FAILED) from exc
 
     prefs.set_value("update.last_check", time.time())
     if source:
@@ -370,7 +486,7 @@ def update(
         target = updater.install_release(release, source=resolved, timeout=max(timeout, 30.0))
     except updater.UpdateError as exc:
         console.print(f"更新失败：{exc}", style="bold red", markup=False)
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=EXIT_FAILED) from exc
     console.print(f"已更新 {target}；重新运行 ifp version 确认版本。", style="green", markup=False)
 
 
@@ -399,7 +515,7 @@ def doctor(
 
     if failed:
         console.print(f"自检发现 {failed} 项问题。", style="bold red", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     console.print("环境自检通过，开始建模：ifp init <dir>", style="green", markup=False)
 
 
@@ -422,7 +538,7 @@ def config_get(key: str = typer.Argument(..., help="点分路径，例如 update
     value = prefs.get(key)
     if value is None:
         console.print(f"未设置：{key}", style="yellow", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     console.print(rendered, markup=False)
 
@@ -461,6 +577,12 @@ def check(
     errors = sum(1 for d in diags if d.severity is Severity.ERROR)
     warnings = sum(1 for d in diags if d.severity is Severity.WARNING)
     console.print(f"检查完成：{errors} error / {warnings} warning", markup=False)
+    if not errors and not warnings:
+        infos = sum(1 for d in diags if d.severity is Severity.INFO)
+        if infos:
+            console.print(f"检查通过：无 error / warning（{infos} 条提示）。", style="green", markup=False)
+        else:
+            console.print("检查通过，未发现问题。", style="green", markup=False)
     _fail_if_errors(diags, strict=strict)
 
 
@@ -511,13 +633,17 @@ def verify_cmd(
     # 按需导入：z3 / SMT 编码只在 verify 命令用到，避免拖慢其他命令的启动
     from .smt import VerifyConfig, check_consistency, verify
 
-    model = parser.load(model_path)
+    model = _load_single(model_path)
 
-    cfg_file = config_path or find_config(model_path)
+    cfg_file = config_path or (find_config(model_path) if str(model_path) != "-" else None)
     plan_intent = None
     cfg = VerifyConfig()
     if cfg_file is not None:
-        plan = load_plan(cfg_file)
+        try:
+            plan = load_plan(cfg_file)
+        except IFPConfigError as exc:
+            console.print(str(exc), style="bold red", markup=False)
+            raise typer.Exit(code=EXIT_FAILED) from exc
         cfg = plan.config
         plan_intent = plan.intent
     if lower is not None:
@@ -559,7 +685,7 @@ def verify_cmd(
         console.print(f"已写入审计日志：{audit_path}", style="green", markup=False)
 
     if report.counterexamples or any(d.severity is Severity.ERROR for d in diags):
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     console.print("未发现违反不变量的反例。", style="green", markup=False)
 
 
@@ -589,7 +715,7 @@ def simulate_cmd(
     results.extend(simulate(project, name))
     if not results:
         console.print("未找到任何场景。", style="yellow", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     failed = 0
     for result in results:
         style = "green" if result.passed else "bold red"
@@ -597,7 +723,7 @@ def simulate_cmd(
         failed += 0 if result.passed else 1
     console.print(f"仿真完成：{len(results) - failed} passed / {failed} failed", markup=False)
     if failed:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 @app.command("run")
@@ -618,15 +744,19 @@ def run_cmd(
     并发度与资源上限默认取偏好（``ifp config set sandbox.jobs 8`` 等），可用参数临时覆盖。
     """
 
-    try:
-        tasks = _build_tasks(job, paths)
-    except IFPParseError as exc:
-        console.print(str(exc), style="bold red", markup=False)
-        raise typer.Exit(code=1) from exc
+    if any(str(path) == "-" for path in paths):
+        console.print(
+            "ifp run 需要真实文件路径（沙箱子进程无法读取 stdin），请改用 ifp check / simulate。",
+            style="bold red",
+            markup=False,
+        )
+        raise typer.Exit(code=EXIT_USAGE)
+
+    tasks = _build_tasks(job, paths)
 
     if not tasks:
         console.print(f"没有可调度的 {job} 任务。", style="yellow", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
     limits = _sandbox_limits(timeout=timeout, cpu=cpu, memory=memory)
     resolved_jobs = _sandbox_jobs(jobs)
@@ -635,28 +765,22 @@ def run_cmd(
     summary = summarize(results, scheduler.duration_s)
 
     if as_json:
-        console.print(
-            json.dumps(
-                {
-                    "job": job,
-                    "jobs": resolved_jobs,
-                    "fail_fast": fail_fast,
-                    "limits": {
-                        "timeout_s": limits.timeout_s,
-                        "cpu_seconds": limits.cpu_seconds,
-                        "memory_mb": limits.memory_mb,
-                        "file_size_mb": limits.file_size_mb,
-                        "open_files": limits.open_files,
-                    },
-                    "tasks": [result.to_json() for result in results],
-                    "summary": summary.to_json(),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            markup=False,
-            soft_wrap=True,
-        )
+        # 直接写 stdout，保证输出是纯 JSON，不被终端装饰或换行干扰。
+        payload = {
+            "job": job,
+            "jobs": resolved_jobs,
+            "fail_fast": fail_fast,
+            "limits": {
+                "timeout_s": limits.timeout_s,
+                "cpu_seconds": limits.cpu_seconds,
+                "memory_mb": limits.memory_mb,
+                "file_size_mb": limits.file_size_mb,
+                "open_files": limits.open_files,
+            },
+            "tasks": [result.to_json() for result in results],
+            "summary": summary.to_json(),
+        }
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     else:
         for result in results:
             if result.ok:
@@ -672,7 +796,7 @@ def run_cmd(
         console.print(summary.line(), style="green" if summary.ok else "bold red", markup=False)
 
     if not summary.ok:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 @app.command()
@@ -706,7 +830,7 @@ def diff(
     for path in (old_path, new_path):
         if not path.exists():
             console.print(f"路径不存在：{path}", style="bold red", markup=False)
-            raise typer.Exit(code=2)
+            raise typer.Exit(code=EXIT_USAGE)
 
     result = diff_paths(old_path, new_path)
     score = risk_score(result)
@@ -742,7 +866,7 @@ def diff(
             principal = rbac.Principal.parse(actor, actor_roles)
         except ValueError as exc:
             console.print(str(exc), style="bold red", markup=False)
-            raise typer.Exit(code=2) from exc
+            raise typer.Exit(code=EXIT_USAGE) from exc
         decision = rbac.authorize_merge(principal, result, threshold)
         console.print(
             decision.format(),
@@ -775,10 +899,10 @@ def diff(
         console.print(f"已写入审计日志：{audit_path}", style="green", markup=False)
 
     if decision is not None and not decision.allowed:
-        raise typer.Exit(code=3)
+        raise typer.Exit(code=EXIT_DENIED)
 
     if fail_on_approval and needs_approval:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 def _gate_report(
@@ -855,7 +979,7 @@ def baseline(
 ) -> None:
     """列出模型中的基线不变量。"""
 
-    model = parser.load(model_path)
+    model = _load_single(model_path)
     refs = baseline_invariants(model)
     if not refs:
         console.print("模型中没有基线不变量。", style="yellow", markup=False)
@@ -874,7 +998,7 @@ def export(
 ) -> None:
     """把模型导出为制品。"""
 
-    model = parser.load(model_path)
+    model = _load_single(model_path)
 
     if fmt in plugin.exporters():
         text = plugin.exporters()[fmt](model, context)
@@ -888,7 +1012,7 @@ def export(
         text = to_protobuf(model, context)
     else:
         console.print(f"未知导出格式：{fmt}", style="bold red", markup=False)
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USAGE)
 
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -950,7 +1074,7 @@ def init(directory: Path = typer.Argument(Path("."), help="目标目录")) -> No
     config_file = directory / "property_test.yaml"
     if model_file.exists() or config_file.exists():
         console.print("目标目录已存在模型文件，已取消。", style="bold red", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
     model_file.write_text(_TEMPLATE, encoding="utf-8")
     config_file.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
     console.print(f"已生成 {model_file} 与 {config_file}", style="green", markup=False)
@@ -1030,12 +1154,12 @@ def repo_commit(
             relative = path.resolve().relative_to(root).as_posix()
         except ValueError:
             console.print(f"路径不在仓库内：{path}", style="bold red", markup=False)
-            raise typer.Exit(code=2) from None
+            raise typer.Exit(code=EXIT_USAGE) from None
         files[relative] = path.read_text(encoding="utf-8")
 
     if not files:
         console.print("未找到任何 .ifp 模型文件。", style="yellow", markup=False)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
     written = repo.write(files)
     commit = repo.commit(
@@ -1089,7 +1213,7 @@ def merge_cmd(
         result = merge_paths(base, ours, theirs)
     except IFPParseError as exc:
         console.print(str(exc), style="bold red", markup=False)
-        raise typer.Exit(code=2) from exc
+        raise typer.Exit(code=EXIT_USAGE) from exc
 
     if as_json:
         payload = {
@@ -1131,7 +1255,7 @@ def merge_cmd(
         console.print(f"已写入审计日志：{audit_path}", style="green", markup=False)
 
     if not result.clean:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 @app.command("metrics")
@@ -1194,7 +1318,7 @@ def align_cmd(
         console.print(
             f"{len(drifted)} 个模型文件未与代码版本对齐。", style="bold red", markup=False
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_FAILED)
 
 
 def main() -> None:

@@ -9,9 +9,9 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from . import sandbox
 from .sandbox import Limits
@@ -130,10 +130,13 @@ class Scheduler:
         self.limits = limits or Limits()
         self.fail_fast = fail_fast
         self.duration_s = 0.0
-        self._halted = False
 
     def run(self, tasks: Sequence[Task]) -> list[TaskResult]:
-        """执行全部任务；返回结果保持与 ``tasks`` 相同的顺序。"""
+        """执行全部任务；返回结果保持与 ``tasks`` 相同的顺序。
+
+        ``fail_fast`` 打开时采用有界滑动窗口：任一任务失败后不再提交新任务，
+        因此在任务数多于并发度时确实能阻止后续任务开始；已经启动的任务仍会执行完成。
+        """
 
         if not tasks:
             self.duration_s = 0.0
@@ -142,21 +145,47 @@ class Scheduler:
         results: list[Optional[TaskResult]] = [None] * len(tasks)
         workers = max(1, min(self.jobs, len(tasks)))
         started = time.monotonic()
+        halted = False
+        next_index = 0
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(self._run_one, task): index for index, task in enumerate(tasks)}
-            for future in as_completed(futures):
-                results[futures[future]] = future.result()
+            inflight: dict[Future[Any], int] = {}
+
+            def fill() -> None:
+                nonlocal next_index
+                while not halted and next_index < len(tasks) and len(inflight) < workers:
+                    inflight[pool.submit(self._run_one, tasks[next_index])] = next_index
+                    next_index += 1
+
+            fill()
+            while inflight:
+                done, _ = wait(list(inflight), return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = inflight.pop(future)
+                    result = future.result()
+                    results[index] = result
+                    if self.fail_fast and not result.ok:
+                        halted = True
+                fill()
+
         self.duration_s = time.monotonic() - started
+        for index, result in enumerate(results):
+            if result is None:  # 未提交的任务（fail_fast 中止）
+                results[index] = TaskResult(
+                    tasks[index],
+                    STATUS_SKIPPED,
+                    -1,
+                    0.0,
+                    detail="前序任务失败，已跳过调度",
+                )
         return [result for result in results if result is not None]
 
     def _run_one(self, task: Task) -> TaskResult:
-        if self._halted:
-            return TaskResult(task, STATUS_SKIPPED, -1, 0.0, detail="前序任务失败，已跳过调度")
         try:
             outcome = sandbox.run(task.argv, limits=self.limits)
         except Exception as exc:  # 调度层兜底：单个任务异常不应带走整批任务的报告
             return TaskResult(task, sandbox.STATUS_BLOCKED, -1, 0.0, detail=str(exc))
-        result = TaskResult(
+        return TaskResult(
             task=task,
             status=outcome.status,
             exit_code=outcome.exit_code,
@@ -165,6 +194,3 @@ class Scheduler:
             stderr=outcome.stderr,
             detail=outcome.detail,
         )
-        if self.fail_fast and not result.ok:
-            self._halted = True
-        return result

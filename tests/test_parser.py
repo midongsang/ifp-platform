@@ -36,6 +36,16 @@ def test_parse_invalid_syntax_raises() -> None:
         parser.parse("context Broken { this is not valid }", filename="broken.ifp")
 
 
+def test_parse_error_carries_line_and_column() -> None:
+    with pytest.raises(IFPParseError) as exc_info:
+        parser.parse("context Broken {\n    intent X { field a: Unknown\n}\n", filename="broken.ifp")
+    exc = exc_info.value
+    assert exc.filename == "broken.ifp"
+    assert exc.line == 3  # 缺一个右花括号，Lark 在第 3 行的 '}' 处报错
+    assert exc.column == 1
+    assert "broken.ifp:3:1" in str(exc)
+
+
 def test_load_refund_example(refund_model_path) -> None:
     model = parser.load(refund_model_path)
 

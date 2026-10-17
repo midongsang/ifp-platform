@@ -48,6 +48,15 @@ STATUS_BLOCKED = "blocked"
 # 子进程会继承父进程环境，但凭证类变量一律剥离，避免模型读到令牌。
 _SECRET_KEYS = ("GITHUB_TOKEN", "GH_TOKEN")
 
+# 被信号终止时给出可读原因，避免只暴露一个负退出码。
+_SIGNAL_HINTS = {
+    "SIGXCPU": "超过 CPU 时间上限（sandbox.cpu）",
+    "SIGKILL": "可能超过内存上限（sandbox.memory），或被系统强制回收",
+    "SIGSEGV": "进程崩溃（段错误），通常是模型过大或环境异常",
+    "SIGABRT": "进程异常中止",
+    "SIGBUS": "进程内存访问异常",
+}
+
 _DEFAULT_PROGRAM: tuple[str, ...] = (sys.executable, "-m", "ifp")
 
 _BOOTSTRAP = """\
@@ -171,6 +180,7 @@ def run(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             errors="replace",
             start_new_session=os.name == "posix",
         )
@@ -184,12 +194,16 @@ def run(
     detail = ""
     try:
         out, err = proc.communicate(timeout=limits.timeout_s)
-        status = STATUS_OK if proc.returncode == 0 else STATUS_FAILED
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         out, err = proc.communicate()
         status = STATUS_TIMEOUT
         detail = f"超过墙钟超时 {limits.timeout_s:g}s，已终止；可用 sandbox.timeout 调高上限"
+    else:
+        code = proc.returncode if proc.returncode is not None else -1
+        status = STATUS_OK if code == 0 else STATUS_FAILED
+        if code < 0:  # 被信号终止：说明是哪一类限制 / 异常，而不是只给一个负退出码
+            detail = _signal_detail(-code)
     finally:
         if not keep_workdir:
             _cleanup(workdir)
@@ -228,6 +242,18 @@ def _kill_group(proc: subprocess.Popen[str]) -> None:
 
 def _cleanup(workdir: Path) -> None:
     shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _signal_detail(signum: int) -> str:
+    """把负退出码（被信号终止）翻译为可读原因。"""
+
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:  # pragma: no cover - 未知信号
+        name = f"信号 {signum}"
+    hint = _SIGNAL_HINTS.get(name, "")
+    text = f"子进程被信号终止：{name}"
+    return f"{text}（{hint}）" if hint else text
 
 
 def _truncate(text: str, limit: int) -> str:

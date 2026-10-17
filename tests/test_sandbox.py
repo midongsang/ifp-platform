@@ -43,6 +43,14 @@ def test_unstartable_program_is_reported_not_raised() -> None:
     assert "No such file" in result.stderr or "FileNotFoundError" in result.stderr
 
 
+def test_signal_killed_child_reports_readable_reason() -> None:
+    result = _run_python("import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+
+    assert result.status == sandbox.STATUS_FAILED
+    assert result.exit_code == -9
+    assert "SIGKILL" in result.detail
+
+
 @pytest.mark.skipif(sandbox.resource is None, reason="POSIX 资源限制不可用")
 def test_limits_are_applied_inside_the_child() -> None:
     result = _run_python(

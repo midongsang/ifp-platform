@@ -26,11 +26,14 @@ class Diagnostic:
     severity: Severity = Severity.ERROR
     file: str = ""
     line: int = 0
+    column: int = 0
 
     def format(self) -> str:
         location = self.file or "<model>"
         if self.line:
             location = f"{location}:{self.line}"
+            if self.column:
+                location = f"{location}:{self.column}"
         return f"{location}: {self.severity.value}[{self.code}] {self.message}"
 
 
@@ -39,12 +42,19 @@ class IFPError(Exception):
 
 
 class IFPParseError(IFPError):
-    """`.ifp` 语法错误。"""
+    """`.ifp` 语法错误，携带出错的行列位置以便定位。"""
 
-    def __init__(self, filename: str, message: str) -> None:
+    def __init__(self, filename: str, message: str, *, line: int = 0, column: int = 0) -> None:
         self.filename = filename
         self.message = message
-        super().__init__(f"{filename}: 解析失败\n{message}")
+        self.line = line
+        self.column = column
+        location = filename
+        if line:
+            location = f"{filename}:{line}"
+            if column:
+                location = f"{location}:{column}"
+        super().__init__(f"{location}: 解析失败\n{message}")
 
 
 class IFPConfigError(IFPError):

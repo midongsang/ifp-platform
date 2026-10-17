@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from lark import Lark, Token, Transformer, Tree
+from lark.exceptions import LarkError, UnexpectedInput
 
 from . import ast
 from .errors import IFPParseError
@@ -425,9 +426,16 @@ def parse(source: str, filename: str = "<string>") -> ast.Model:
 
     try:
         tree: Tree = get_parser().parse(source)
-    except Exception as exc:  # lark 的异常类型较多，统一包装
+    except UnexpectedInput as exc:  # 语法 / 词法错误，携带出错行列
+        line = getattr(exc, "line", 0) or 0
+        column = getattr(exc, "column", 0) or 0
+        raise IFPParseError(filename, str(exc), line=line, column=column) from exc
+    except LarkError as exc:  # 其他 Lark 层错误
         raise IFPParseError(filename, str(exc)) from exc
-    model: ast.Model = _ToAst().transform(tree)
+    try:
+        model: ast.Model = _ToAst().transform(tree)
+    except Exception as exc:  # AST 转换过程中出现的非预期异常，仍归为解析失败
+        raise IFPParseError(filename, f"AST 转换失败：{exc}") from exc
     return ast.Model(
         contexts=model.contexts, scenarios=model.scenarios, source=filename
     )
@@ -437,7 +445,7 @@ def load(path: str | Path) -> ast.Model:
     """从文件加载并解析 `.ifp` 模型。"""
 
     path = Path(path)
-    return parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
 
 
 def merge(models: Sequence[ast.Model], source: str = "<project>") -> ast.Model:

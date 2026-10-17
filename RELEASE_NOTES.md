@@ -1,3 +1,47 @@
+# IFP v0.2.1 — 底层修复与输入输出体验优化
+
+在 v0.2.0 沙箱与任务调度器的基础上，本次版本聚焦底层健壮性与输入输出体验，
+属于修补版本（bug 修复与可用性改进）。
+
+## 底层修复
+
+- **解析异常收敛**：`parser.parse` 不再用 `except Exception` 一把抓，而是区分 Lark 语法/词法错误
+  与 AST 转换异常，内部 bug 不再被伪装成「解析失败」。
+- **沙箱信号原因可读**：子进程被信号终止时（SIGKILL / SIGXCPU / SIGSEGV 等）不再只给负退出码，
+  会附带「子进程被信号终止：SIGXCPU（超过 CPU 时间上限）」这类可读原因。
+- **调度器 fail-fast 真正生效**：`ifp run --fail-fast` 改为有界滑动窗口提交，任务数多于并发度时
+  确实能阻止后续任务开始；未提交的任务明确标记为 `skipped`。
+- **编码与 BOM 容错**：读取 `.ifp` 文件统一使用 `utf-8-sig`，带 BOM 的文件不再被首字符污染。
+
+## 输入优化
+
+- **路径不存在时报错清晰**：输入路径不存在时输出「路径不存在：…」并以退出码 2 结束，不再抛
+  Python traceback。
+- **解析错误带行列定位**：`IFPParseError` 携带 `line` / `column`，错误信息形如
+  `file:line:col: 解析失败`，CLI 还会渲染出错行与 `^` 插入符。
+- **支持 stdin 与 glob**：`ifp check -` 从标准输入读取模型；`ifp check 'src/**/*.ifp'`
+  自动展开 glob 模式。
+- **重复输入去重**：同一文件被多次传入时按绝对路径去重，避免重复解析与重复诊断。
+- **非法并发度拦截**：`ifp run -j 0` 不再被静默改成 1，而是提示并以退出码 2 结束。
+
+## 输出优化
+
+- **诊断带源码片段**：类型检查 / Lint 的诊断会附带出错行的源码片段与插入符，定位更直观。
+- **正向反馈**：`ifp check` 无 error/warning 时输出绿色「检查通过」文案。
+- **退出码约定统一**：`0 成功 / 1 检查失败 / 2 用法或输入错误 / 3 审批拒绝`，并在模块文档中声明。
+- **JSON 输出纯净**：`ifp run --json` 直接写 stdout，确保管道消费方拿到的是纯 JSON。
+
+## 安装
+
+```bash
+pip install ifp_platform-0.2.1-py3-none-any.whl
+```
+
+详见 [README](https://github.com/midongsang/ifp-platform/blob/main/README.md) 与
+[路线图](https://github.com/midongsang/ifp-platform/blob/main/docs/roadmap.md)。
+
+---
+
 # IFP v0.2.0 — 隔离沙箱与任务调度器
 
 第二个版本。在第一个版本（v0.1.0）把 `建模 → 检查 → 验证 → 仿真 → 治理 → 协作 → 导出`
