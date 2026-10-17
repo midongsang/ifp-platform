@@ -108,6 +108,7 @@ def test_model_metrics_as_dict() -> None:
         "dead_invariants",
         "actions",
         "contracts",
+        "events",
         "scenarios",
         "rule_coverage",
         "action_coverage",

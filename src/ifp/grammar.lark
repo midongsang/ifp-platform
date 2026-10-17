@@ -9,7 +9,7 @@ start: (context_decl | scenario_decl)*
 // ----------------------------- 模型声明 ------------------------------------
 
 context_decl: "context" CNAME "{" context_item* "}"
-context_item: description | value_decl | intent_decl | contract_decl
+context_item: description | value_decl | intent_decl | contract_decl | event_decl
 
 description: "description" ":" STRING
 
@@ -50,6 +50,15 @@ action_item: "pre"        ":" expr     -> act_pre
 contract_decl: "contract" CNAME "{" contract_item* "}"
 contract_item: description | expose_decl | invariant_decl
 expose_decl: "expose" NAME ("," NAME)*
+
+// ----------------------------- 事件声明 ------------------------------------
+// 领域事件：聚合状态发生变化时产生的事实记录。
+// event 可声明字段（事件载荷）与 produced_by（产生该事件的动作）。
+// 事件重放（event replay）按事件序列恢复聚合状态并校验不变量。
+
+event_decl: "event" CNAME "{" event_item* "}"
+event_item: description | field_decl | produced_by_decl
+produced_by_decl: "produced_by" ":" CNAME
 
 // ----------------------------- 场景声明 ------------------------------------
 

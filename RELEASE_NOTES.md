@@ -1,3 +1,56 @@
+# IFP v0.3.0 — 领域事件与事件重放
+
+在 v0.2.1 的基础上，本次版本引入**领域事件（Domain Event）声明**与
+**事件重放（Event Replay）**能力，为事件溯源（Event Sourcing）建模打下基础。
+属于功能迭代版本（minor）。
+
+## 新增能力
+
+- **`event` 声明**：在 `context` 内声明领域事件，支持载荷字段（`field`）与
+  `produced_by` 动作引用。事件是聚合状态变化的事实记录。
+- **事件重放 `ifp event replay`**：按 JSON 事件序列逐步恢复聚合状态，并在
+  每一步之后校验聚合不变量。事件若声明了 `produced_by`，则复用对应动作的
+  `post` 条件推导状态；否则按字段名直接写入状态。重放不校验动作前置条件
+  （事件是已发生的历史事实），只关注不变量是否始终成立。
+- **类型检查增强**：新增诊断码 `IFP1040`（`produced_by` 引用未定义动作）与
+  `IFP1041`（事件字段与动作参数不匹配，warning）；事件字段类型复用现有
+  值对象 / 状态机类型解析。
+- **语义 Diff 覆盖事件**：`ifp diff` 能识别事件的增删、`produced_by` 变更与
+  字段类型变更。
+- **度量与导出**：`ifp metrics` 统计事件数量；`ifp export --format json` 导出
+  事件声明（含字段与 `produced_by`）。
+
+## 事件重放 JSON 格式
+
+```json
+{
+  "context": "RefundContext",
+  "intent": "RefundOrder",
+  "initial": {"orderPaidAmount": 100, "totalRefundedAmount": 0,
+              "status": "RefundStatus::Pending"},
+  "events": [
+    {"type": "Audited"},
+    {"type": "RefundExecuted", "data": {"amount": 40}}
+  ]
+}
+```
+
+## 退出码
+
+`ifp event replay`：`0` 全部事件重放后不变量成立 / `1` 存在不变量违反或重放失败 /
+`2` 输入文件不存在或格式错误。
+
+## 安装
+
+```bash
+pip install ifp_platform-0.3.0-py3-none-any.whl
+```
+
+详见 [README](https://github.com/midongsang/ifp-platform/blob/main/README.md) 与
+[路线图](https://github.com/midongsang/ifp-platform/blob/main/docs/roadmap.md)。
+
+---
+
 # IFP v0.2.1 — 底层修复与输入输出体验优化
 
 在 v0.2.0 沙箱与任务调度器的基础上，本次版本聚焦底层健壮性与输入输出体验，

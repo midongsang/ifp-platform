@@ -74,6 +74,7 @@ def _diff_context(old: ast.ContextDecl, new: ast.ContextDecl, result: DiffResult
     _diff_intents(old, new, result)
     _diff_values(old, new, result)
     _diff_contracts(old, new, result)
+    _diff_events(old, new, result)
 
 
 def _diff_intents(old: ast.ContextDecl, new: ast.ContextDecl, result: DiffResult) -> None:
@@ -208,6 +209,43 @@ def _diff_contracts(old: ast.ContextDecl, new: ast.ContextDecl, result: DiffResu
                 result.changes.append(
                     Change("changed", f"{loc}/expose", "契约暴露字段变更")
                 )
+
+
+def _diff_events(old: ast.ContextDecl, new: ast.ContextDecl, result: DiffResult) -> None:
+    old_e = {e.name: e for e in old.events}
+    new_e = {e.name: e for e in new.events}
+    for name in sorted(set(old_e) | set(new_e)):
+        loc = f"{old.name}/event {name}"
+        if name not in old_e:
+            result.changes.append(Change("added", loc, "新增领域事件"))
+        elif name not in new_e:
+            result.changes.append(Change("removed", loc, "删除领域事件"))
+        else:
+            o, n = old_e[name], new_e[name]
+            if o.produced_by != n.produced_by:
+                result.changes.append(
+                    Change(
+                        "changed", f"{loc}/produced_by",
+                        f"{o.produced_by} -> {n.produced_by}",
+                    )
+                )
+            old_fields = {f.name: f for f in o.fields}
+            new_fields = {f.name: f for f in n.fields}
+            for fname in sorted(set(old_fields) | set(new_fields)):
+                floc = f"{loc}/field {fname}"
+                if fname not in old_fields:
+                    result.changes.append(
+                        Change("added", floc, f"新增事件字段 {new_fields[fname].type}")
+                    )
+                elif fname not in new_fields:
+                    result.changes.append(Change("removed", floc, "删除事件字段"))
+                elif str(old_fields[fname].type) != str(new_fields[fname].type):
+                    result.changes.append(
+                        Change(
+                            "changed", floc,
+                            f"类型 {old_fields[fname].type} -> {new_fields[fname].type}",
+                        )
+                    )
 
 
 def _diff_scenarios(old: ast.Model, new: ast.Model, result: DiffResult) -> None:

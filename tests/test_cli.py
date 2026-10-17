@@ -160,3 +160,78 @@ def test_parse_error_renders_source_snippet(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "| ^" in result.stdout  # 出错行的插入符指示
+
+
+EVENT_MODEL = """
+context RefundContext {
+    intent RefundOrder {
+        field orderPaidAmount: Decimal
+        field totalRefundedAmount: Decimal = 0
+        field status: RefundStatus = RefundStatus::Pending
+        state RefundStatus { Pending, Approved, Refunded }
+        initial: RefundStatus::Pending
+        invariant totalRefundNotExceedPaid {
+            expr: totalRefundedAmount <= orderPaidAmount
+            baseline: true
+        }
+        action Audit {
+            pre: status == RefundStatus::Pending
+            post: status == RefundStatus::Approved
+        }
+        action ExecuteRefund(amount: Decimal) {
+            pre: status == RefundStatus::Approved && amount >= 0
+            post: status == RefundStatus::Refunded
+                  && totalRefundedAmount == old(totalRefundedAmount) + amount
+        }
+    }
+    event Audited { produced_by: Audit }
+    event RefundExecuted { field amount: Decimal produced_by: ExecuteRefund }
+}
+"""
+
+EVENT_PAYLOAD = """{
+  "context": "RefundContext",
+  "intent": "RefundOrder",
+  "initial": {"orderPaidAmount": 100, "totalRefundedAmount": 0,
+              "status": "RefundStatus::Pending"},
+  "events": [
+    {"type": "Audited"},
+    {"type": "RefundExecuted", "data": {"amount": 40}}
+  ]
+}
+"""
+
+
+def test_event_replay_valid_sequence_exits_zero(tmp_path: Path) -> None:
+    model = tmp_path / "model.ifp"
+    model.write_text(EVENT_MODEL, encoding="utf-8")
+    events = tmp_path / "events.json"
+    events.write_text(EVENT_PAYLOAD, encoding="utf-8")
+
+    result = _run("event", "replay", str(model), str(events))
+
+    assert result.exit_code == 0
+    assert "PASS" in result.stdout
+
+
+def test_event_replay_invariant_violation_exits_one(tmp_path: Path) -> None:
+    model = tmp_path / "model.ifp"
+    model.write_text(EVENT_MODEL, encoding="utf-8")
+    events = tmp_path / "events.json"
+    events.write_text(
+        EVENT_PAYLOAD.replace('"amount": 40', '"amount": 150'), encoding="utf-8"
+    )
+
+    result = _run("event", "replay", str(model), str(events))
+
+    assert result.exit_code == 1
+    assert "totalRefundNotExceedPaid" in result.stdout
+
+
+def test_event_replay_missing_file_exits_usage(tmp_path: Path) -> None:
+    model = tmp_path / "model.ifp"
+    model.write_text(EVENT_MODEL, encoding="utf-8")
+
+    result = _run("event", "replay", str(model), str(tmp_path / "nope.json"))
+
+    assert result.exit_code == 2

@@ -39,6 +39,16 @@ def _context_dict(ctx: ast.ContextDecl) -> dict[str, Any]:
             {"name": c.name, "description": c.description, "exposes": list(c.exposes)}
             for c in ctx.contracts
         ],
+        "events": [_event_dict(e) for e in ctx.events],
+    }
+
+
+def _event_dict(event: ast.EventDecl) -> dict[str, Any]:
+    return {
+        "name": event.name,
+        "description": event.description,
+        "fields": [_field_dict(f) for f in event.fields],
+        "produced_by": event.produced_by,
     }
 
 

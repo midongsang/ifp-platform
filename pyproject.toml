@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ifp-platform"
-version = "0.2.1"
+version = "0.3.0"
 description = "IFP 意图形式化平台：把业务规则从自然语言变成机器可校验的模型"
 readme = "README.md"
 requires-python = ">=3.11"

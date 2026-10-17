@@ -44,6 +44,7 @@ class ModelMetrics:
     dead_invariants: int
     actions: int
     contracts: int
+    events: int
     scenarios: int
     rule_coverage: float
     action_coverage: float
@@ -65,7 +66,8 @@ class ModelMetrics:
             f"- 限界上下文 {self.contexts} · Intent {self.intents} · 值对象 {self.value_objects}",
             f"- 不变量 {self.invariants}（基线 {self.baseline_invariants}）"
             f" · 死不变量 {self.dead_invariants}",
-            f"- 动作 {self.actions}（pre/post 齐备 {actions_with_post}）",
+            f"- 动作 {self.actions}（pre/post 齐备 {actions_with_post}）"
+            f" · 事件 {self.events}",
             f"- 规则覆盖率 {self.rule_coverage:.1%} · 动作覆盖率 {self.action_coverage:.1%}",
         ]
 
@@ -153,6 +155,7 @@ def collect(model: ast.Model) -> ModelMetrics:
     dead_invariants_total = 0
     actions_total = 0
     contracts = 0
+    events = 0
     intents_with_invariant = 0
     values_with_invariant = 0
     actions_with_pre_total = 0
@@ -161,6 +164,7 @@ def collect(model: ast.Model) -> ModelMetrics:
 
     for ctx in model.contexts:
         contracts += len(ctx.contracts)
+        events += len(ctx.events)
         for value in ctx.values:
             value_objects += 1
             value_invariants = len(value.invariants)
@@ -221,6 +225,7 @@ def collect(model: ast.Model) -> ModelMetrics:
         dead_invariants=dead_invariants_total,
         actions=actions_total,
         contracts=contracts,
+        events=events,
         scenarios=scenarios,
         rule_coverage=rule_coverage,
         action_coverage=action_coverage,

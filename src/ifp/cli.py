@@ -14,6 +14,7 @@
     ifp merge   <base> <ours> <theirs>  基于业务语义的三方合并
     ifp metrics <paths...>    模型度量指标（规则覆盖率 / 死不变量 / 基线数量）
     ifp align   <repo>        模型与代码版本对齐审计
+    ifp event   replay <model> <events.json>  事件重放：恢复聚合状态并校验不变量
     ifp update  [--check]     检查来源仓库的版本发行并按需更新（显示发行时间与资产大小）
     ifp doctor  [--online]    环境自检：依赖、内置资源与工具链
     ifp config  get/set/list  查看与修改本地偏好（更新源、自动检查）
@@ -1120,6 +1121,9 @@ def web(
 repo_app = typer.Typer(add_completion=False, help="Git 兼容的模型仓库")
 app.add_typer(repo_app, name="repo")
 
+event_app = typer.Typer(add_completion=False, help="领域事件：声明与重放")
+app.add_typer(event_app, name="event")
+
 _ALIGNMENT_STYLE = {"aligned": "green", "drift": "yellow", "unknown": "red"}
 
 
@@ -1318,6 +1322,68 @@ def align_cmd(
         console.print(
             f"{len(drifted)} 个模型文件未与代码版本对齐。", style="bold red", markup=False
         )
+        raise typer.Exit(code=EXIT_FAILED)
+
+
+@event_app.command("replay")
+def event_replay_cmd(
+    model_path: Path = typer.Argument(..., help="模型文件（.ifp）"),
+    events_path: Path = typer.Argument(..., help="事件序列文件（JSON）"),
+    audit_path: Optional[Path] = typer.Option(None, "--audit", help="写入审计日志（JSONL）"),
+) -> None:
+    """按事件序列恢复聚合状态，并在每一步校验不变量。
+
+    事件序列 JSON 格式::
+
+        {
+          "context": "RefundContext",
+          "intent": "RefundOrder",
+          "initial": {"orderPaidAmount": 100, "totalRefundedAmount": 0,
+                      "status": "RefundStatus::Pending"},
+          "events": [
+            {"type": "Audited"},
+            {"type": "RefundExecuted", "data": {"amount": 40}}
+          ]
+        }
+
+    退出码：``0`` 全部事件重放后不变量成立 / ``1`` 存在不变量违反或重放失败 /
+    ``2`` 输入文件不存在或格式错误。
+    """
+
+    if not model_path.exists():
+        console.print(f"模型文件不存在：{model_path}", style="bold red", markup=False)
+        raise typer.Exit(code=EXIT_USAGE)
+    if not events_path.exists():
+        console.print(f"事件文件不存在：{events_path}", style="bold red", markup=False)
+        raise typer.Exit(code=EXIT_USAGE)
+
+    from .event_replay import replay_from_file
+
+    model = _load_single(model_path)
+    try:
+        result = replay_from_file(model, events_path)
+    except (OSError, ValueError) as exc:
+        console.print(f"事件序列加载失败：{exc}", style="bold red", markup=False)
+        raise typer.Exit(code=EXIT_USAGE) from exc
+
+    for step in result.steps:
+        style = "green" if step.applied and not step.violations else "bold red"
+        console.print(step.summary(), style=style, markup=False)
+
+    console.print(result.summary(), style="green" if result.passed else "bold red", markup=False)
+
+    if audit_path is not None:
+        log = AuditLog(audit_path)
+        log.append(
+            "event_replay",
+            model=str(model_path),
+            events=str(events_path),
+            steps=len(result.steps),
+            passed=result.passed,
+        )
+        console.print(f"已写入审计日志：{audit_path}", style="green", markup=False)
+
+    if not result.passed:
         raise typer.Exit(code=EXIT_FAILED)
 
 

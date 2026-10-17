@@ -60,6 +60,8 @@ def typecheck(model: ast.Model, project: Optional[ast.Model] = None) -> list[Dia
             diags.extend(_check_intent(intent, enums, value_objects, model.source))
         for contract in ctx.contracts:
             diags.extend(_check_contract(contract, ctx, model.source))
+        for event in ctx.events:
+            diags.extend(_check_event(event, ctx, enums, value_objects, model.source))
 
     diags.extend(_check_scenarios(model, enums, project, value_objects))
     diags.extend(_check_enum_refs(model, enums))
@@ -107,6 +109,10 @@ def _all_exprs(model: ast.Model):
             for inv in contract.invariants:
                 if inv.expr is not None:
                     yield inv.expr
+        for event in ctx.events:
+            for f in event.fields:
+                if f.default is not None:
+                    yield f.default
     for scenario in model.scenarios:
         for _, expr in scenario.given:
             yield expr
@@ -231,6 +237,76 @@ def _check_contract(contract: ast.ContractDecl, ctx: ast.ContextDecl, source: st
                 )
             )
     return diags
+
+
+def _check_event(
+    event: ast.EventDecl,
+    ctx: ast.ContextDecl,
+    enums: dict[str, tuple[str, ...]],
+    value_objects: dict[str, ast.ValueDecl],
+    source: str,
+) -> list[Diagnostic]:
+    """校验事件载荷字段类型与 produced_by 动作引用。"""
+
+    diags: list[Diagnostic] = []
+
+    # 字段类型合法性（复用值对象的环境构建逻辑）
+    env = _env_of(event.fields, source, diags, enums=enums, value_objects=value_objects)
+    del env  # 环境已在 _env_of 内完成类型解析与重复定义诊断
+
+    # produced_by 必须指向本上下文内某个 intent 的动作
+    if event.produced_by is not None:
+        action = _find_action(ctx, event.produced_by)
+        if action is None:
+            diags.append(
+                Diagnostic(
+                    "IFP1040",
+                    f"事件 {event.name} 的 produced_by 引用了未定义的动作 {event.produced_by}",
+                    Severity.ERROR, source, event.line,
+                )
+            )
+        else:
+            # 事件字段应与动作参数一一对应（名称 + 类型），保证重放时可直接映射
+            expected = {p.name: p.type for p in action.params}
+            provided = {f.name: f.type for f in event.fields}
+            if set(expected) != set(provided):
+                missing = sorted(set(expected) - set(provided))
+                extra = sorted(set(provided) - set(expected))
+                detail_parts: list[str] = []
+                if missing:
+                    detail_parts.append(f"缺少字段 {missing}")
+                if extra:
+                    detail_parts.append(f"多余字段 {extra}")
+                diags.append(
+                    Diagnostic(
+                        "IFP1041",
+                        f"事件 {event.name} 字段与动作 {event.produced_by} 参数不匹配："
+                        + "；".join(detail_parts),
+                        Severity.WARNING, source, event.line,
+                    )
+                )
+            else:
+                for fname, ftype in provided.items():
+                    if str(ftype) != str(expected[fname]):
+                        diags.append(
+                            Diagnostic(
+                                "IFP1041",
+                                f"事件 {event.name} 字段 {fname} 类型 {ftype} 与动作 "
+                                f"{event.produced_by} 参数类型 {expected[fname]} 不一致",
+                                Severity.WARNING, source, event.line,
+                            )
+                        )
+    return diags
+
+
+def _find_action(ctx: ast.ContextDecl, name: str) -> Optional[ast.ActionDecl]:
+    """在上下文内所有 intent 中查找指定名称的动作。"""
+
+    for intent in ctx.intents:
+        for action in intent.actions:
+            if action.name == name:
+                return action
+    return None
 
 
 # ---------------------------------------------------------------------------

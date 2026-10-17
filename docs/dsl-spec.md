@@ -31,7 +31,7 @@ context RefundContext {
 
 ### 0.2 关键字
 
-`context`、`description`、`value`、`invariant`、`intent`、`field`、`state`、`initial`、`action`、`pre`、`post`、`transition`、`contract`、`expose`、`expr`、`baseline`、`risk`、`owner`、`note`、`scenario`、`given`、`when`、`rejected`、`then`、`old`、`true`、`false`。
+`context`、`description`、`value`、`invariant`、`intent`、`field`、`state`、`initial`、`action`、`pre`、`post`、`transition`、`contract`、`expose`、`event`、`produced_by`、`expr`、`baseline`、`risk`、`owner`、`note`、`scenario`、`given`、`when`、`rejected`、`then`、`old`、`true`、`false`。
 
 ### 0.3 标识符与字面量
 
@@ -68,10 +68,10 @@ start: (context_decl | scenario_decl)*
 
 ```text
 context_decl: "context" CNAME "{" context_item* "}"
-context_item: description | value_decl | intent_decl | contract_decl
+context_item: description | value_decl | intent_decl | contract_decl | event_decl
 ```
 
-语义：一个 `context` 对应一个 DDD 限界上下文（业务域边界），内部可包含一个 `description`、若干 `value` 值对象、若干 `intent` 聚合根、若干 `contract` 跨域契约。
+语义：一个 `context` 对应一个 DDD 限界上下文（业务域边界），内部可包含一个 `description`、若干 `value` 值对象、若干 `intent` 聚合根、若干 `contract` 跨域契约、若干 `event` 领域事件。
 
 ```text
 context RefundContext {
@@ -80,6 +80,7 @@ context RefundContext {
     value Money { ... }
     intent RefundOrder { ... }
     contract RefundContract { ... }
+    event RefundExecuted { ... }
 }
 ```
 
@@ -91,7 +92,7 @@ context RefundContext {
 description: "description" ":" STRING
 ```
 
-`description` 是**唯一在语义 Diff 中零风险权重**的条目（仅描述文本，不影响业务规则）。可用于 `context`、`value`、`intent`、`contract`。
+`description` 是**唯一在语义 Diff 中零风险权重**的条目（仅描述文本，不影响业务规则）。可用于 `context`、`value`、`intent`、`contract`、`event`。
 
 ---
 
@@ -323,7 +324,43 @@ contract RefundContract {
 
 ---
 
-## 10. 仿真场景：`scenario`
+## 10. 领域事件：`event`
+
+```text
+event_decl: "event" CNAME "{" event_item* "}"
+event_item: description | field_decl | produced_by_decl
+produced_by_decl: "produced_by" ":" CNAME
+```
+
+领域事件是聚合状态发生变化时产生的**事实记录**。事件可包含 `description`、若干 `field`（事件载荷字段）以及 `produced_by`（产生该事件的动作名）。
+
+```text
+event RefundExecuted {
+    description: "退款资金已执行"
+    field amount: Decimal
+    produced_by: ExecuteRefund
+}
+```
+
+- `produced_by` 引用本上下文内某个 `intent` 的动作；若引用未定义的动作，
+  报 [`IFP1040`](modeling-standard.md)（error）。
+- 若声明了 `produced_by`，事件字段应与对应动作的参数一一对应（名称 + 类型），
+  不匹配时报 [`IFP1041`](modeling-standard.md)（warning）。
+
+### 10.1 事件重放
+
+`ifp event replay <model> <events.json>` 按 JSON 事件序列逐步恢复聚合状态，
+并在每一步之后校验聚合不变量：
+
+- 事件声明了 `produced_by` 时，复用对应动作的 `post` 条件推导状态
+  （事件 `data` 作为动作参数）；
+- 未声明 `produced_by` 时，按字段名直接把事件 `data` 写入状态。
+
+重放不校验动作前置条件（事件是已发生的历史事实），只关注不变量是否始终成立。
+
+---
+
+## 11. 仿真场景：`scenario`
 
 ```text
 scenario_decl: "scenario" CNAME "{" scenario_item* "}"
@@ -382,7 +419,7 @@ scenario PartialRefundOnce {
 
 ---
 
-## 11. 合并与跨文件引用
+## 12. 合并与跨文件引用
 
 CLI 在接收目录或多个文件时，会把所有 `.ifp` 合并为一个**项目模型**再检查：
 
@@ -393,7 +430,7 @@ CLI 在接收目录或多个文件时，会把所有 `.ifp` 合并为一个**项
 
 ---
 
-## 12. 表达式语法
+## 13. 表达式语法
 
 ```text
 ?expr: or_expr
@@ -501,7 +538,7 @@ action ExecuteRefund(amount: Decimal) {
 
 ---
 
-## 13. 完整示例
+## 14. 完整示例
 
 一个最小但完整的模型（含状态机、不变量、动作与场景）：
 

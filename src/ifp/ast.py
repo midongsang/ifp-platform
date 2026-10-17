@@ -184,12 +184,29 @@ class ContractDecl:
 
 
 @dataclass(frozen=True)
+class EventDecl:
+    """领域事件声明：聚合状态变化的事实记录。
+
+    - ``fields``：事件载荷字段（如金额、新状态）。
+    - ``produced_by``：产生该事件的动作名（可选）。重放时若存在则以对应动作
+      的 post 条件推导状态；否则按字段名直接写入状态。
+    """
+
+    name: str
+    description: Optional[str] = None
+    fields: tuple[FieldDecl, ...] = ()
+    produced_by: Optional[str] = None
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class ContextDecl:
     name: str
     description: Optional[str] = None
     values: tuple[ValueDecl, ...] = ()
     intents: tuple[IntentDecl, ...] = ()
     contracts: tuple[ContractDecl, ...] = ()
+    events: tuple[EventDecl, ...] = ()
     line: int = 0
 
 

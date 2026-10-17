@@ -36,7 +36,8 @@ class _ToAst(Transformer):
     # -- context ------------------------------------------------------------
     def context_decl(self, children: Sequence[Any]) -> ast.ContextDecl:
         name_tok = children[0]
-        values, intents, contracts, desc = [], [], [], None
+        values, intents, contracts, events = [], [], [], []
+        desc = None
         for child in children[1:]:
             if isinstance(child, tuple):
                 desc = child[1]
@@ -46,12 +47,15 @@ class _ToAst(Transformer):
                 intents.append(child)
             elif isinstance(child, ast.ContractDecl):
                 contracts.append(child)
+            elif isinstance(child, ast.EventDecl):
+                events.append(child)
         return ast.ContextDecl(
             name=str(name_tok),
             description=desc,
             values=tuple(values),
             intents=tuple(intents),
             contracts=tuple(contracts),
+            events=tuple(events),
             line=name_tok.line,
         )
 
@@ -257,6 +261,33 @@ class _ToAst(Transformer):
             description=desc,
             exposes=exposes,
             invariants=tuple(invariants),
+            line=name_tok.line,
+        )
+
+    # -- 领域事件 -----------------------------------------------------------
+    def event_item(self, children: Sequence[Any]) -> Any:
+        return children[0]
+
+    def produced_by_decl(self, children: Sequence[Any]) -> tuple[str, str]:
+        return ("produced_by", str(children[0]))
+
+    def event_decl(self, children: Sequence[Any]) -> ast.EventDecl:
+        name_tok = children[0]
+        fields: list[ast.FieldDecl] = []
+        produced_by: Optional[str] = None
+        desc = None
+        for child in children[1:]:
+            if isinstance(child, tuple) and child[0] == "__description__":
+                desc = child[1]
+            elif isinstance(child, tuple) and child[0] == "produced_by":
+                produced_by = child[1]
+            elif isinstance(child, ast.FieldDecl):
+                fields.append(child)
+        return ast.EventDecl(
+            name=str(name_tok),
+            description=desc,
+            fields=tuple(fields),
+            produced_by=produced_by,
             line=name_tok.line,
         )
 
